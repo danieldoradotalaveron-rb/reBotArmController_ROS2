@@ -8,7 +8,9 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/JointMotorCmd.msg"
+  "msg/JointMitCmd.msg"
+  "msg/JointPosVelCmd.msg"
+  "msg/JointVelCmd.msg"
   "msg/JointMotorState.msg"
   "msg/ArmStatus.msg"
   "srv/SetMode.srv"

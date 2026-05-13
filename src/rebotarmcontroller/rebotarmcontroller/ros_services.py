@@ -85,6 +85,7 @@ class ArmServices:
 
     def disable(self, _request, response):
         try:
+            self._hardware.stop_gravity_compensation()
             self._hardware.disable()
             response.success = True
             response.message = "disabled"
@@ -97,7 +98,7 @@ class ArmServices:
     def safe_home(self, _request, response):
         try:
             self._hardware.stop_gravity_compensation()
-            self._hardware.ensure_pos_vel_control()
+            self._hardware.start_endpos_control()
             self._hardware.endpos_ctrl.safe_home()
             response.success = True
             response.message = "safe_home complete"
@@ -171,15 +172,15 @@ class ArmServices:
     def move_to_pose_ik(self, request, response):
         try:
             self._hardware.stop_gravity_compensation()
-            self._hardware.ensure_pos_vel_control()
+            self._hardware.start_endpos_control()
             x, y, z, roll, pitch, yaw = pose_to_xyz_rpy(request.target_pose)
             ok = self._hardware.endpos_ctrl.move_to_ik(x, y, z, roll, pitch, yaw)
+            q_solution = self._hardware.endpos_ctrl._q_target.copy()
             response.success = bool(ok)
             response.message = "IK target accepted" if ok else "IK failed"
-            response.q_solution = [
-                float(v) for v in self._hardware.endpos_ctrl._q_target.copy()
-            ]
+            response.q_solution = [float(v) for v in q_solution]
         except Exception as exc:
+            self._hardware.hold_current_position()
             response.success = False
             response.message = str(exc)
             response.q_solution = []
@@ -196,8 +197,8 @@ class ArmServices:
             response.reached_position = float(reached_position)
             self._node.get_logger().info(
                 "gripper set "
-                f"target={float(request.position):.3f}m "
-                f"reached={response.reached_position:.3f}m "
+                f"target={float(request.position):.3f}rad "
+                f"reached={response.reached_position:.3f}rad "
                 f"success={response.success}"
             )
         except Exception as exc:

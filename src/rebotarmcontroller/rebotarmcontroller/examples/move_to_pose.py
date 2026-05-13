@@ -56,10 +56,7 @@ class DemoMoveToPose(Node):
         goal.target_pose.orientation.w = float(self._target.qw)
         goal.duration = float(self._target.duration)
 
-        send_future = self._move_to_pose.send_goal_async(
-            goal,
-            feedback_callback=self._feedback_cb,
-        )
+        send_future = self._move_to_pose.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, send_future)
         goal_handle = send_future.result()
         if goal_handle is None or not goal_handle.accepted:
@@ -71,12 +68,6 @@ class DemoMoveToPose(Node):
         result = result_future.result().result
         self.get_logger().info(f"success={result.success} message={result.message}")
         return bool(result.success)
-
-    def _feedback_cb(self, feedback_msg) -> None:
-        feedback = feedback_msg.feedback
-        self.get_logger().info(
-            f"progress={feedback.progress:.2f} elapsed={feedback.time_elapsed:.2f}s"
-        )
 
     def _wait_for_joint_state(self, timeout_sec: float = 5.0) -> bool:
         deadline = time.monotonic() + timeout_sec

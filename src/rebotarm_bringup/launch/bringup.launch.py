@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, Shutdown
 from launch.conditions import IfCondition
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -47,6 +47,7 @@ def generate_launch_description():
                 executable="reBotArmController",
                 name="reBotArmController",
                 output="screen",
+                on_exit=Shutdown(reason="reBotArmController exited"),
                 parameters=[
                     {
                         "arm_config": arm_config,

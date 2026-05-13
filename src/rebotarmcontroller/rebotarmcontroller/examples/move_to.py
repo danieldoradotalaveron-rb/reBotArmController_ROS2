@@ -25,11 +25,6 @@ def _duration_msg(seconds: float) -> Duration:
     return Duration(sec=sec, nanosec=nanosec)
 
 
-def _smoothstep(ratio: float) -> float:
-    ratio = max(0.0, min(1.0, ratio))
-    return 10.0 * ratio**3 - 15.0 * ratio**4 + 6.0 * ratio**5
-
-
 class DemoMoveTo(Node):
     def __init__(
         self,
@@ -108,16 +103,10 @@ class DemoMoveTo(Node):
 
         trajectory = JointTrajectory()
         trajectory.joint_names = joint_names
-        trajectory.points = []
-
-        steps = max(2, int(self._duration / 0.05))
-        for step in range(steps + 1):
-            ratio = step / float(steps)
-            blend = _smoothstep(ratio)
-            point = JointTrajectoryPoint()
-            point.positions = [float(v) for v in current + (target - current) * blend]
-            point.time_from_start = _duration_msg(self._duration * ratio)
-            trajectory.points.append(point)
+        point = JointTrajectoryPoint()
+        point.positions = [float(v) for v in target]
+        point.time_from_start = _duration_msg(self._duration)
+        trajectory.points = [point]
 
         self.get_logger().info(
             "moving joints to "

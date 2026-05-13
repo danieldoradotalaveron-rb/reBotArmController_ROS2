@@ -9,8 +9,8 @@ from rebotarm_msgs.srv import SetGripper
 from std_srvs.srv import Trigger
 
 _NAMESPACE = "rebotarm"
-_OPEN_POSITION_M = 0.09
-_CLOSE_POSITION_M = 0.0
+_OPEN_POSITION_RAD = -5.0
+_CLOSE_POSITION_RAD = 0.0
 _MAX_EFFORT = 0.0
 
 
@@ -42,17 +42,17 @@ class DemoGripperControl(Node):
             if command in ("q", "quit", "exit"):
                 break
             if command in ("o", "open"):
-                self._set_gripper(_OPEN_POSITION_M, "open")
+                self._set_gripper(_OPEN_POSITION_RAD, "open")
                 continue
             if command in ("c", "close"):
-                self._set_gripper(_CLOSE_POSITION_M, "close")
+                self._set_gripper(_CLOSE_POSITION_RAD, "close")
                 continue
             self.get_logger().info("commands: o/open, c/close, q/quit")
         return True
 
     def cleanup(self) -> None:
         if self._enabled_by_demo:
-            self._set_gripper(_CLOSE_POSITION_M, "close")
+            self._set_gripper(_CLOSE_POSITION_RAD, "close")
             self._call_trigger(self._disable, "disable")
 
     def _call_trigger(self, client, label: str, timeout_sec: float = 5.0) -> bool:
@@ -85,11 +85,11 @@ class DemoGripperControl(Node):
             return False
         if not result.success:
             self.get_logger().warn(
-                f"{label} not reached, current={result.reached_position:.3f}m"
+                f"{label} not reached, current={result.reached_position:.3f}rad"
             )
             return False
         self.get_logger().info(
-            f"{label} reached, current={result.reached_position:.3f}m"
+            f"{label} reached, current={result.reached_position:.3f}rad"
         )
         return True
 
