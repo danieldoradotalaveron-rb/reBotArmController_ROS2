@@ -50,6 +50,7 @@ def generate_launch_description():
         executable="move_group",
         output="screen",
         parameters=[moveit_config.to_dict()],
+        remappings=[("/joint_states", ["/", arm_namespace, "/joint_states"])],
     )
 
     rviz_config = PathJoinSubstitution(
@@ -73,6 +74,7 @@ def generate_launch_description():
             moveit_config.robot_description_kinematics,
             moveit_config.joint_limits,
         ],
+        remappings=[("/joint_states", ["/", arm_namespace, "/joint_states"])],
     )
 
     static_tf_node = Node(

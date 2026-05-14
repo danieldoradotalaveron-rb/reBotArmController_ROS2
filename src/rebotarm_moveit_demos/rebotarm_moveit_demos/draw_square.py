@@ -4,6 +4,8 @@ import sys
 from math import pi
 
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
+from moveit_msgs.msg import Constraints, JointConstraint, MoveItErrorCodes
+from moveit_msgs.srv import GetMotionPlan
 import rclpy
 from std_msgs.msg import Header
 from tf_transformations import quaternion_from_euler
@@ -28,31 +30,43 @@ class DrawSquare(MoveItDemoBase):
         self.rectangle_height = float(self._param("rectangle_height"))
         self.tcp_rpy = [float(value) for value in self._param("tcp_rpy")]
         self.tcp_yaw_offsets = [float(value) for value in self._param("tcp_yaw_offsets")]
+        self._planner = self.node.create_client(GetMotionPlan, "/plan_kinematic_path")
         self.ik_timeout = float(self._param("ik_timeout"))
         self.result_timeout = float(self._param("result_timeout"))
-        self.motion_duration = float(self._param("motion_duration"))
         self.avoid_collisions = bool(self._param("avoid_collisions"))
 
     def run(self) -> bool:
+        if not self._planner.wait_for_service(timeout_sec=10.0):
+            self.node.get_logger().error(
+                "MoveIt service /plan_kinematic_path is not available"
+            )
+            return False
         if not self.wait_for_ik_service():
             return False
         if not self.wait_for_execute_server():
             return False
 
-        current = self._wrap_joints(self._current_joint_values())
-        if not self._move_joints("reset", current, self.start_point):
+        current_joints = self._wrap_joints(self._current_joint_values())
+        if not self._plan_to_joints("reset", current_joints, self.start_point):
             return False
-        current = self.start_point
 
         points = self._rectangle_points()
-        points.append(points[0])
+        first_corner = self.corner_joint_target(points[0], self.start_point, "corner 1")
+        if first_corner is None or not self._plan_to_joints(
+            "corner 1",
+            self.start_point,
+            first_corner,
+        ):
+            return False
 
-        for index, point in enumerate(points, start=1):
-            label = f"corner {index}"
-            target = self.corner_joint_target(point, current, label)
-            if target is None or not self._move_joints(label, current, target):
+        current_joints = first_corner
+        for edge_index, end in enumerate(points[1:] + [points[0]], start=1):
+            target = self.corner_joint_target(end, current_joints, f"corner {edge_index + 1}")
+            if target is None:
                 return False
-            current = target
+            if not self._plan_to_joints(f"edge {edge_index}", current_joints, target):
+                return False
+            current_joints = target
 
         self.node.get_logger().info("rectangle draw demo finished")
         return True
@@ -157,7 +171,7 @@ class DrawSquare(MoveItDemoBase):
             result.append(pi if wrapped == -pi and value > 0.0 else wrapped)
         return result
 
-    def _move_joints(
+    def _plan_to_joints(
         self,
         label: str,
         start_values: list[float],
@@ -166,9 +180,63 @@ class DrawSquare(MoveItDemoBase):
         start_values = self._wrap_joints(start_values)
         goal_values = self._wrap_joints(goal_values)
         self.node.get_logger().info(f"move to {label}")
-        return self.execute_trajectory(
-            self.joint_trajectory(start_values, goal_values, self.motion_duration),
-            self.result_timeout,
+        request = GetMotionPlan.Request()
+        request.motion_plan_request.group_name = self.group_name
+        request.motion_plan_request.pipeline_id = str(self._param("pipeline_id"))
+        request.motion_plan_request.planner_id = str(self._param("planner_id"))
+        request.motion_plan_request.allowed_planning_time = float(
+            self._param("planning_time")
+        )
+        request.motion_plan_request.num_planning_attempts = 5
+        request.motion_plan_request.max_velocity_scaling_factor = float(
+            self._param("velocity_scaling")
+        )
+        request.motion_plan_request.max_acceleration_scaling_factor = float(
+            self._param("acceleration_scaling")
+        )
+        request.motion_plan_request.start_state = self._joint_state(start_values)
+        request.motion_plan_request.goal_constraints = [
+            self._joint_constraints(goal_values)
+        ]
+
+        future = self._planner.call_async(request)
+        if not self.wait(future, self.result_timeout):
+            self.node.get_logger().error(
+                f"MoveIt planner did not return within {self.result_timeout:.1f}s"
+            )
+            return False
+
+        response = future.result()
+        plan_response = response.motion_plan_response if response is not None else None
+        if (
+            plan_response is None
+            or plan_response.error_code.val != MoveItErrorCodes.SUCCESS
+        ):
+            code = plan_response.error_code.val if plan_response is not None else "empty"
+            message = (
+                plan_response.error_code.message if plan_response is not None else ""
+            )
+            self.node.get_logger().error(
+                f"MoveIt planning failed with code {code}: {message}"
+            )
+            return False
+
+        self.node.get_logger().info(f"MoveIt planned {label}")
+        return self.execute_trajectory(plan_response.trajectory, self.result_timeout)
+
+    def _joint_constraints(self, joint_values: list[float]) -> Constraints:
+        tolerance = float(self._param("joint_tolerance"))
+        return Constraints(
+            joint_constraints=[
+                JointConstraint(
+                    joint_name=name,
+                    position=value,
+                    tolerance_above=tolerance,
+                    tolerance_below=tolerance,
+                    weight=1.0,
+                )
+                for name, value in zip(self.joint_names, joint_values)
+            ]
         )
 
     def _current_joint_values(self) -> list[float]:

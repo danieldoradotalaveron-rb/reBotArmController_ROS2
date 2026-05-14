@@ -118,7 +118,7 @@ class PickPlace(MoveItDemoBase):
         if not self._move_joints("pick", current, pick_target):
             return False
         current = pick_target
-        if not self._command_gripper("close"):
+        if not self._command_gripper("grasp"):
             return False
         if not self._attach_object(object_pose):
             return False
@@ -145,13 +145,14 @@ class PickPlace(MoveItDemoBase):
         goal_values: list[float],
     ) -> bool:
         self.node.get_logger().info(f"move to {label}")
-        if self._joint_values_close(start_values, goal_values):
+        current_values = self.current_joint_values(start_values, "current joint state")
+        if self._joint_values_close(current_values, goal_values):
             self.node.get_logger().info(f"already at {label}, skip motion")
             return True
         duration = float(self._param("direct_motion_duration"))
         self.node.get_logger().info(f"execute direct joint motion to {label}")
         return self.execute_trajectory(
-            self.joint_trajectory(start_values, goal_values, duration),
+            self.joint_trajectory(current_values, goal_values, duration),
             float(self._param("result_timeout")),
         )
 
@@ -245,7 +246,9 @@ class PickPlace(MoveItDemoBase):
             return True
 
         if mode == "open":
-            position = float(self._param("open_gripper_position"))
+            position = self._open_gripper_position()
+        elif mode == "grasp":
+            position = self._grasp_gripper_position()
         else:
             position = self._closed_gripper_position()
 
@@ -275,11 +278,11 @@ class PickPlace(MoveItDemoBase):
 
     def _command_gripper_action(self, mode: str, position: float) -> bool:
         goal = GripperCommand.Goal()
-        goal.command.position = position
+        goal.command.position = self._hardware_gripper_position(position)
         goal.command.max_effort = float(self._param("gripper_max_effort"))
 
         self.node.get_logger().info(
-            f"{mode} gripper to {position:.4f} via "
+            f"{mode} gripper to {goal.command.position:.4f} via "
             f"{self._param('hardware_gripper_action_name')}"
         )
         return self._send_gripper_goal(goal)
@@ -312,27 +315,40 @@ class PickPlace(MoveItDemoBase):
                 f"{result.error_string}"
             )
             return False
-        if hasattr(result, "reached_goal") and not result.reached_goal:
-            self.node.get_logger().error("gripper command did not reach goal")
-            return False
         return True
 
-    def _closed_gripper_position(self) -> float:
-        if not bool(self._param("close_gripper_to_object_width")):
-            return float(self._param("closed_gripper_position"))
+    def _open_gripper_position(self) -> float:
+        return self._clamp_gripper_width(float(self._param("open_gripper_position")))
 
+    def _closed_gripper_position(self) -> float:
+        return self._clamp_gripper_width(float(self._param("closed_gripper_position")))
+
+    def _grasp_gripper_position(self) -> float:
+        if not bool(self._param("grasp_gripper_to_object_width")):
+            return self._closed_gripper_position()
         dimensions = [float(value) for value in self._param("object_dimensions")]
         width_index = int(self._param("gripper_width_dimension_index"))
         object_width = dimensions[width_index]
         padding = float(self._param("gripper_grasp_padding"))
-        open_position = float(self._param("open_gripper_position"))
-        closed_limit = float(self._param("closed_gripper_position"))
-        target = min(open_position, max(closed_limit, (object_width + padding) * 0.5))
+        target = self._clamp_gripper_width((object_width + padding) * 0.5)
         self.node.get_logger().info(
-            f"computed gripper close position {target:.4f} "
+            f"computed gripper grasp position {target:.4f} "
             f"for object width {object_width:.4f}"
         )
         return target
+
+    def _clamp_gripper_width(self, position: float) -> float:
+        low = float(self._param("closed_gripper_position"))
+        high = float(self._param("open_gripper_position"))
+        return max(low, min(high, position))
+
+    def _hardware_gripper_position(self, sim_position: float) -> float:
+        max_width = float(self._param("max_gripper_width"))
+        ratio = 0.0 if max_width <= 0.0 else (2.0 * sim_position / max_width)
+        open_position = float(self._param("hardware_open_gripper_position"))
+        closed_position = float(self._param("hardware_closed_gripper_position"))
+        ratio = max(0.0, min(1.0, ratio))
+        return closed_position + (open_position - closed_position) * ratio
 
     def _add_collision_object(self, object_pose: Pose) -> bool:
         object_id = str(self._param("object_id"))
@@ -541,6 +557,17 @@ class PickPlace(MoveItDemoBase):
             return False
         return True
 
+    def _wait_for_gripper_server(self) -> bool:
+        if self._gripper_trajectory.wait_for_server(timeout_sec=1.0):
+            self._gripper = self._gripper_trajectory
+            self._gripper_kind = "trajectory"
+            return True
+        if self._gripper_command.wait_for_server(timeout_sec=10.0):
+            self._gripper = self._gripper_command
+            self._gripper_kind = "command"
+            return True
+        return False
+
 
 def main() -> None:
     rclpy.init()
@@ -558,13 +585,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    def _wait_for_gripper_server(self) -> bool:
-        if self._gripper_trajectory.wait_for_server(timeout_sec=1.0):
-            self._gripper = self._gripper_trajectory
-            self._gripper_kind = "trajectory"
-            return True
-        if self._gripper_command.wait_for_server(timeout_sec=10.0):
-            self._gripper = self._gripper_command
-            self._gripper_kind = "command"
-            return True
-        return False

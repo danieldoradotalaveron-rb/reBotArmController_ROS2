@@ -123,59 +123,66 @@ class ArmActions:
             )
             return result
 
-        target = np.array(trajectory.points[-1].positions, dtype=np.float64)
-        if len(target) != len(self._hardware.joint_names):
+        targets = [np.array(point.positions, dtype=np.float64) for point in trajectory.points]
+        if any(len(target) != len(self._hardware.joint_names) for target in targets):
             goal_handle.abort()
             result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
-            result.error_string = "last point positions length must match joint_names"
+            result.error_string = "point positions length must match joint_names"
             return result
 
         self._hardware.set_state_machine("TRAJ_RUNNING")
         self._node.publish_arm_status()
         try:
             self._hardware.start_endpos_control()
-            self._hardware.set_joint_position_target(target)
+            start = time.monotonic()
+            point_times = [
+                float(point.time_from_start.sec)
+                + float(point.time_from_start.nanosec) * 1e-9
+                for point in trajectory.points
+            ]
+            if point_times[0] > 0.0:
+                targets.insert(0, self._hardware.get_joint_positions().copy())
+                point_times.insert(0, 0.0)
 
-            last_point = trajectory.points[-1]
-            duration = float(last_point.time_from_start.sec) + (
-                float(last_point.time_from_start.nanosec) * 1e-9
-            )
-            desired_velocities = (
-                np.array(last_point.velocities, dtype=np.float64)
-                if len(last_point.velocities) == len(target)
-                else np.zeros_like(target)
-            )
-            deadline = time.monotonic() + max(duration, 0.0)
+            for index in range(1, len(targets)):
+                q0 = targets[index - 1]
+                q1 = targets[index]
+                t0 = point_times[index - 1]
+                t1 = max(point_times[index], t0)
+                desired_velocities = np.zeros_like(q1)
 
-            while True:
-                positions = self._hardware.get_joint_positions()
-                velocities = self._hardware.get_joint_velocities()
-                feedback = FollowJointTrajectory.Feedback()
-                feedback.header.stamp = self._node.get_clock().now().to_msg()
-                feedback.joint_names = self._hardware.joint_names
-                feedback.desired.positions = [float(v) for v in target]
-                feedback.desired.velocities = [float(v) for v in desired_velocities]
-                feedback.actual.positions = [float(v) for v in positions]
-                feedback.actual.velocities = [float(v) for v in velocities]
-                feedback.error.positions = [
-                    float(v) for v in target - positions
-                ]
-                feedback.error.velocities = [
-                    float(v) for v in desired_velocities - velocities
-                ]
-                goal_handle.publish_feedback(feedback)
+                while True:
+                    now = time.monotonic() - start
+                    ratio = 1.0 if t1 <= t0 else max(0.0, min(1.0, (now - t0) / (t1 - t0)))
+                    target = q0 + (q1 - q0) * ratio
+                    self._hardware.set_joint_position_target(target)
 
-                if goal_handle.is_cancel_requested:
-                    self._hardware.hold_current_position()
-                    goal_handle.canceled()
-                    result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
-                    result.error_string = "follow_joint_trajectory canceled"
-                    return result
+                    positions = self._hardware.get_joint_positions()
+                    velocities = self._hardware.get_joint_velocities()
+                    feedback = FollowJointTrajectory.Feedback()
+                    feedback.header.stamp = self._node.get_clock().now().to_msg()
+                    feedback.joint_names = self._hardware.joint_names
+                    feedback.desired.positions = [float(v) for v in target]
+                    feedback.desired.velocities = [float(v) for v in desired_velocities]
+                    feedback.actual.positions = [float(v) for v in positions]
+                    feedback.actual.velocities = [float(v) for v in velocities]
+                    feedback.error.positions = [float(v) for v in target - positions]
+                    feedback.error.velocities = [
+                        float(v) for v in desired_velocities - velocities
+                    ]
+                    goal_handle.publish_feedback(feedback)
 
-                remaining = deadline - time.monotonic()
-                if remaining <= 0.0:
-                    break
-                time.sleep(min(0.1, remaining))
+                    if goal_handle.is_cancel_requested:
+                        self._hardware.hold_current_position()
+                        goal_handle.canceled()
+                        result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
+                        result.error_string = "follow_joint_trajectory canceled"
+                        return result
+
+                    if now >= t1:
+                        break
+                    time.sleep(0.02)
+
         except Exception as exc:
             self._hardware.hold_current_position()
             goal_handle.abort()
@@ -203,7 +210,7 @@ class ArmActions:
         feedback = GripperCommand.Feedback()
 
         try:
-            self._hardware.set_gripper_target(goal.position, goal.max_effort)
+            self._hardware.set_gripper_target(goal.position)
         except Exception:
             goal_handle.abort()
             result.position = 0.0
@@ -213,19 +220,18 @@ class ArmActions:
             return result
 
         start = time.monotonic()
-        last_pos = self._hardware.gripper_position()
+        last_pos = self._hardware.get_gripper_state()[0]
         stalled = False
         while time.monotonic() - start < 5.0:
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
-                result.position = self._hardware.gripper_position()
+                result.position = self._hardware.get_gripper_state()[0]
                 result.effort = self._hardware.get_gripper_state()[2]
                 result.stalled = stalled
                 result.reached_goal = False
                 return result
 
-            pos = self._hardware.gripper_position()
-            effort = self._hardware.get_gripper_state()[2]
+            pos, _, effort, _ = self._hardware.get_gripper_state()
             reached = self._hardware.gripper_reached_target()
             stalled = abs(pos - last_pos) < 1e-4 and abs(effort) >= float(goal.max_effort)
             feedback.position = pos
@@ -238,7 +244,7 @@ class ArmActions:
             last_pos = pos
             time.sleep(0.05)
 
-        result.position = self._hardware.gripper_position()
+        result.position = self._hardware.get_gripper_state()[0]
         result.effort = self._hardware.get_gripper_state()[2]
         result.stalled = stalled
         result.reached_goal = self._hardware.gripper_reached_target()

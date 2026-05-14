@@ -16,6 +16,7 @@ _GC_W_VEL_THRESHOLD = 0.08
 _GC_KP = 7.0
 _GC_KD = 0.8
 _GRIPPER_GOAL_TOLERANCE_RAD = 0.12
+_GRIPPER_CLOSED_POSITION = 0.0
 
 
 class HardwareManager:
@@ -186,8 +187,7 @@ class HardwareManager:
             self.stop_gravity_compensation()
 
             if safe_home:
-                self.start_endpos_control()
-                self._endpos_ctrl.safe_home()
+                self.safe_home()
 
             if disable_after_safe_home:
                 self.disable()
@@ -258,6 +258,13 @@ class HardwareManager:
         self._endpos_ctrl._running = False
         self._enabled = False
         self.set_state_machine("IDLE")
+
+    def safe_home(self) -> None:
+        self.stop_gravity_compensation()
+        if self.has_gripper:
+            self.set_gripper_position(_GRIPPER_CLOSED_POSITION)
+        self.start_endpos_control()
+        self._endpos_ctrl.safe_home()
 
     def set_mode(self, mode: str) -> bool:
         mode = mode.strip().lower()
@@ -508,7 +515,7 @@ class HardwareManager:
 
         ctrl.enable_all()
         self._set_gripper_mode("pos_vel")
-        self._gripper_target_position = self.gripper_position()
+        self._gripper_target_position = self.get_gripper_state()[0]
 
     def disconnect_gripper(self) -> None:
         if self._gripper_mot is None:
@@ -518,8 +525,7 @@ class HardwareManager:
         self._gripper_cfg = None
         self._gripper_target_position = None
 
-    def set_gripper_target(self, position: float, max_effort: float = 0.0) -> None:
-        del max_effort
+    def set_gripper_target(self, position: float) -> None:
         self._begin_gripper_command()
         self._set_gripper_mode("pos_vel")
         self._gripper_mot.send_pos_vel(float(position), float(self._gripper_cfg.vlim))
@@ -537,11 +543,11 @@ class HardwareManager:
     def set_gripper_position(
         self,
         position: float,
-        max_effort: float = 0.0,
+        timeout: float = 3.0,
     ) -> tuple[bool, float]:
-        self.set_gripper_target(position, max_effort)
-        reached = self.wait_gripper_target()
-        return reached, self.gripper_position()
+        self.set_gripper_target(position)
+        reached = self.wait_gripper_target(timeout)
+        return reached, self.get_gripper_state()[0]
 
     def get_gripper_state(self) -> tuple[float, float, float, int]:
         if self._gripper_mot is None:
@@ -560,13 +566,10 @@ class HardwareManager:
             status = 0
         return float(pos), float(vel), float(torque), status
 
-    def gripper_position(self) -> float:
-        return self.get_gripper_state()[0]
-
     def gripper_reached_target(self) -> bool:
         if self._gripper_target_position is None:
             return True
-        pos = self.gripper_position()
+        pos = self.get_gripper_state()[0]
         return abs(pos - self._gripper_target_position) < _GRIPPER_GOAL_TOLERANCE_RAD
 
     def send_gripper_mit_cmd(

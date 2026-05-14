@@ -9,6 +9,7 @@ from moveit_msgs.msg import MoveItErrorCodes, RobotState, RobotTrajectory
 from moveit_msgs.srv import GetPositionIK
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -27,7 +28,18 @@ class MoveItDemoBase:
 
         self._execute = ActionClient(self.node, ExecuteTrajectory, "/execute_trajectory")
         self._ik = self.node.create_client(GetPositionIK, "/compute_ik")
-        self.node.create_subscription(JointState, "/joint_states", self._joint_state_cb, 10)
+        self.node.create_subscription(
+            JointState,
+            "/joint_states",
+            self._joint_state_cb,
+            qos_profile_sensor_data,
+        )
+        self.node.create_subscription(
+            JointState,
+            "/rebotarm/joint_states",
+            self._joint_state_cb,
+            qos_profile_sensor_data,
+        )
 
     def _param(self, name: str):
         return self.node.get_parameter(name).value
@@ -79,7 +91,8 @@ class MoveItDemoBase:
         ):
             if time.monotonic() >= deadline:
                 self.node.get_logger().warn(
-                    f"Timed out waiting for /joint_states; using configured {fallback_name}"
+                    "Timed out waiting for /joint_states or /rebotarm/joint_states; "
+                    f"using configured {fallback_name}"
                 )
                 return fallback_values
             rclpy.spin_once(self.node, timeout_sec=0.1)
@@ -109,6 +122,25 @@ class MoveItDemoBase:
                         positions=list(goal_values),
                         time_from_start=self.duration(duration_sec),
                     ),
+                ],
+            )
+        )
+
+    def joint_trajectory_points(
+        self,
+        joint_values: list[list[float]],
+        duration_sec: float,
+    ) -> RobotTrajectory:
+        step_duration = duration_sec / max(len(joint_values) - 1, 1)
+        return RobotTrajectory(
+            joint_trajectory=JointTrajectory(
+                joint_names=list(self.joint_names),
+                points=[
+                    JointTrajectoryPoint(
+                        positions=list(values),
+                        time_from_start=self.duration(index * step_duration),
+                    )
+                    for index, values in enumerate(joint_values)
                 ],
             )
         )

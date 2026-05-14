@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/ROS2-Humble | Jazzy-blue.svg" alt="ROS2 Humble">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python 3.10">
-  <img src="https://img.shields.io/badge/Version-v0.2.1-brightgreen.svg" alt="Version v0.2.1">
+  <img src="https://img.shields.io/badge/Version-v0.2.2-brightgreen.svg" alt="Version v0.2.2">
   <img src="https://img.shields.io/badge/Platform-Ubuntu%2022.04+-orange.svg" alt="Ubuntu 22.04+">
   <img src="https://img.shields.io/badge/Hardware-B601--DM-lightgrey.svg" alt="B601-DM">
 </p>
@@ -28,7 +28,7 @@
 
 ## Overview
 
-Current version: `v0.2.1`
+Current version: `v0.2.2`
 
 `rebotarm_ros2` is the ROS2 SDK workspace for the reBot Arm B601-DM. It wraps the
 existing `reBotArm_control_py` Python control library into ROS2 topics, services
@@ -131,7 +131,6 @@ git clone https://github.com/vectorBH6/reBotArm_control_py.git third_party/reBot
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -230,7 +229,6 @@ Start the controller in one terminal:
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_bringup bringup.launch.py channel:=/dev/ttyACM0
 ```
@@ -239,7 +237,6 @@ In another terminal:
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
 
@@ -259,7 +256,7 @@ ros2 action send_goal /rebotarm/move_to_pose rebotarm_msgs/action/MoveToPose \
 `move_to_pose` switches to `pos_vel` mode internally and calls
 `ArmEndPos.move_to_traj(...)` from the SDK.
 
-3. Return to safe home:
+3. Close the gripper and return to safe home:
 
 ```bash
 ros2 service call /rebotarm/safe_home std_srvs/srv/Trigger
@@ -279,7 +276,6 @@ All examples assume `reBotArmController` is already running:
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_bringup bringup.launch.py channel:=/dev/ttyACM0
 ```
@@ -405,14 +401,8 @@ hardware, verify joint directions, limits, velocity limits and gripper range.
 
 ### MoveIt Environment Setup
 
-Make sure the ROS2 environment is sourced first:
-
-```bash
-source /opt/ros/humble/setup.bash
-```
-
-If you use Jazzy, replace `humble` with `jazzy`. You can also install packages
-for the currently sourced ROS distribution through `ROS_DISTRO`:
+Make sure the ROS2 environment is available first. You can install packages for
+the currently sourced ROS distribution through `ROS_DISTRO`:
 
 ```bash
 sudo apt update
@@ -453,7 +443,6 @@ Simulation environment:
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_moveit_config demo.launch.py
 ```
@@ -485,14 +474,14 @@ In another terminal:
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_moveit_config hardware.launch.py
 ```
 
 The hardware MoveIt launch does not own the `reBotArmController` lifecycle. When
-`reBotArmController` exits, it runs `safe_home`, then `disable`, then disconnects
-the hardware.
+`reBotArmController` exits, it runs `safe_home`. That flow closes the gripper
+first, then returns the arm to safe home, then disables and disconnects the
+hardware.
 
 ### Run the draw-square demo
 
@@ -500,7 +489,6 @@ Start the MoveIt environment first, then run in another terminal:
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_moveit_demos draw_square.launch.py
 ```
@@ -528,7 +516,6 @@ Start the MoveIt environment first, then run in another terminal:
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_moveit_demos pick_place.launch.py
 ```
@@ -537,7 +524,8 @@ In the hardware environment, the demo automatically reuses the existing
 `/rebotarm/gripper/command` gripper action. No extra config file is needed.
 
 
-Default flow: move to ready, open gripper, move to the pick point, close gripper,
+Default flow: move to ready, open gripper, move to the pick point, grasp to the
+object width,
 attach the object, return to ready, move to the placement point mirrored about
 the `base_link` X axis, detach the object and open the gripper.
 
@@ -555,8 +543,10 @@ Common parameters:
 | `pick_position` | Object bottom-center position in `base_link` |
 | `pick_tcp_rpy` / `place_tcp_rpy` | TCP orientation for pick and place |
 | `object_dimensions` | Planning-scene object dimensions in meters |
-| `open_gripper_position` / `closed_gripper_position` | Gripper joint open/close positions |
-| `close_gripper_to_object_width` | Compute the close position from object width |
+| `max_gripper_width` | Maximum total gripper opening, default `0.09m` |
+| `open_gripper_position` / `closed_gripper_position` | Simulated single-side gripper joint open/close positions |
+| `hardware_open_gripper_position` / `hardware_closed_gripper_position` | Hardware gripper motor open/close positions |
+| `grasp_gripper_to_object_width` | Compute the grasp position from object width |
 
 ### MoveIt configuration files
 
@@ -575,6 +565,44 @@ Common parameters:
 ---
 
 ## FAQ / Troubleshooting
+
+### `ros2: command not found`
+
+The ROS2 environment is not available in the current shell, or ROS2 is not
+installed. Install ROS2 first, then source the matching distribution once per
+terminal session:
+
+```bash
+source /opt/ros/humble/setup.bash
+```
+
+If you use Jazzy, replace `humble` with `jazzy`.
+
+To load ROS2 automatically in new terminals, add the source command to
+`~/.bashrc`:
+
+```bash
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+```
+
+### ROS2 executable not found
+
+If `ros2 run` or `ros2 launch` cannot find a package or executable, the
+workspace overlay is usually not sourced in the current terminal. Rebuild if
+needed, then source the workspace:
+
+```bash
+cd your/path/to/rebotarm_ros2
+colcon build --symlink-install
+source install/setup.bash
+```
+
+You can verify installed entry points with:
+
+```bash
+ros2 pkg executables rebotarmcontroller
+ros2 pkg executables rebotarm_moveit_demos
+```
 
 ### Serial device not found
 

@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/ROS2-Humble | Jazzy-blue.svg" alt="ROS2 Humble">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python 3.10">
-  <img src="https://img.shields.io/badge/Version-v0.2.1-brightgreen.svg" alt="Version v0.2.1">
+  <img src="https://img.shields.io/badge/Version-v0.2.2-brightgreen.svg" alt="Version v0.2.2">
   <img src="https://img.shields.io/badge/Platform-Ubuntu%2022.04+-orange.svg" alt="Ubuntu 22.04+">
   <img src="https://img.shields.io/badge/Hardware-B601--DM-lightgrey.svg" alt="B601-DM">
 </p>
@@ -28,7 +28,7 @@
 
 ## 项目介绍
 
-当前版本：`v0.2.1`
+当前版本：`v0.2.2`
 
 `rebotarm_ros2` 是 reBot Arm B601-DM 机械臂的 ROS2 SDK 工作空间。它将现有的
 `reBotArm_control_py` Python 控制库封装为 ROS2 topic、service 和 action，
@@ -130,7 +130,6 @@ git clone https://github.com/vectorBH6/reBotArm_control_py.git third_party/reBot
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -236,7 +235,6 @@ ros2 run rebotarmcontroller reBotArmController
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_bringup bringup.launch.py channel:=/dev/ttyACM0
 ```
@@ -245,7 +243,6 @@ ros2 launch rebotarm_bringup bringup.launch.py channel:=/dev/ttyACM0
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
 
@@ -264,7 +261,7 @@ ros2 action send_goal /rebotarm/move_to_pose rebotarm_msgs/action/MoveToPose \
 
 `move_to_pose` action 内部会确保进入 `pos_vel` 控制，并直接调用 SDK `ArmEndPos.move_to_traj(...)`。
 
-3. 回到安全零位：
+3. 闭合夹爪并回到安全零位：
 
 ```bash
 ros2 service call /rebotarm/safe_home std_srvs/srv/Trigger
@@ -284,7 +281,6 @@ ros2 service call /rebotarm/disable std_srvs/srv/Trigger
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_bringup bringup.launch.py channel:=/dev/ttyACM0
 ```
@@ -415,19 +411,15 @@ MoveIt 相关内容集中在两个包：
 | `rebotarm_moveit_config` | 机械臂模型、SRDF、运动学、joint limits、controller 和 RViz 配置 |
 | `rebotarm_moveit_demos` | 基于 MoveIt 2 的应用 demo |
 
-MoveIt 环境目前使用 `ros2_control` 的模拟硬件和 `move_group` 进行规划执行，适合在 RViz
-中验证模型、IK、轨迹规划和 demo 流程。接入真实硬件前，请先确认关节方向、限位、速度和夹爪开闭范围。
+MoveIt 环境使用 `ros2_control` 的模拟硬件和 `move_group` 进行规划执行，适合在 RViz
+中验证模型、IK、轨迹规划和 demo 流程。
+
+本仓库同样提供了硬件接口的支持。接入真实硬件前，请先确认机械臂零点配置、关节方向、限位、
+速度和夹爪开闭范围相关配置准确或者保持仓库默认配置。
 
 ### MoveIt 环境配置
 
-先确认已经加载 ROS2 环境：
-
-```bash
-source /opt/ros/humble/setup.bash
-```
-
-如果使用 Jazzy，将上面的 `humble` 替换为 `jazzy`。也可以使用当前 shell 中的
-`ROS_DISTRO` 自动安装对应版本：
+先确认已经加载 ROS2 环境。下面的命令会使用当前 `ROS_DISTRO` 安装对应版本依赖：
 
 ```bash
 sudo apt update
@@ -454,20 +446,23 @@ ros2 pkg list | grep rebotarm_moveit
 ros2 pkg executables rebotarm_moveit_demos
 ```
 
-期望至少能看到：
+期望至少能看到如下两个可执行 Demo：
 
 ```text
 rebotarm_moveit_demos draw_square
 rebotarm_moveit_demos pick_place
 ```
 
-### 启动 MoveIt 环境
+### 使用 MoveIt
 
-模拟环境：
+MoveIt 的规划功能需要基于 RViz GUI 或者通过节点调用，可以适用于仿真或真实场景。详情可以参考MoveIt 官方文档。
+
+#### 在仿真环境使用 MoveIt
+
+MoveIt 通过 ros2_control 虚拟硬件接口实现 RViz 中的仿真，首先启用
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_moveit_config demo.launch.py
 ```
@@ -482,13 +477,18 @@ ros2 launch rebotarm_moveit_config demo.launch.py
 - `gripper_controller`
 - RViz MoveIt MotionPlanning 插件
 
+RViz 界面会自动弹出并加载机械臂的urdf模型，可以通过左侧的 GUI 控制面板对机械臂的运动进行控制。
+
 如果只需要后台 MoveIt 环境，不启动 RViz：
 
 ```bash
 ros2 launch rebotarm_moveit_config demo.launch.py use_rviz:=false
 ```
 
-硬件环境需要先启动真实控制器，再启动硬件版 MoveIt：
+#### 使用 MoveIt 控制 reBotArm
+
+在实际场景中使用 MoveIt 控制 reBotArm 需要先启动带有硬件接口的控制器而不再是虚拟控制器，
+再启动针对实际场景的 MoveIt 环境：
 
 ```bash
 ros2 launch rebotarm_bringup driver.launch.py channel:=/dev/ttyACM0
@@ -498,13 +498,9 @@ ros2 launch rebotarm_bringup driver.launch.py channel:=/dev/ttyACM0
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_moveit_config hardware.launch.py
 ```
-
-硬件版 MoveIt 不拥有 `reBotArmController` 生命周期；退出 `reBotArmController` 时会自动执行
-`safe_home`，然后 `disable` 并断开硬件。
 
 ### 运行画矩形 demo
 
@@ -512,7 +508,6 @@ ros2 launch rebotarm_moveit_config hardware.launch.py
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_moveit_demos draw_square.launch.py
 ```
@@ -539,7 +534,6 @@ src/rebotarm_moveit_demos/config/draw_square.yaml
 
 ```bash
 cd your/path/to/rebotarm_ros2
-source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch rebotarm_moveit_demos pick_place.launch.py
 ```
@@ -547,7 +541,7 @@ ros2 launch rebotarm_moveit_demos pick_place.launch.py
 硬件环境下会自动复用现有 `/rebotarm/gripper/command` 夹爪 action。
 
 
-`pick_place` 的默认流程为：移动到 ready 位、打开夹爪、移动到抓取点、闭合夹爪、attach
+`pick_place` 的默认流程为：移动到 ready 位、打开夹爪、移动到抓取点、按物体宽度夹取、attach
 物体、回到 ready 位、移动到关于 `base_link` X 轴对称的放置点、detach 物体并松开夹爪。
 
 默认参数在：
@@ -564,8 +558,10 @@ src/rebotarm_moveit_demos/config/pick_place.yaml
 | `pick_position` | 物体底面中心位置，坐标系为 `base_link` |
 | `pick_tcp_rpy` / `place_tcp_rpy` | 抓取和放置时的末端姿态 |
 | `object_dimensions` | MoveIt 场景中物体尺寸，单位 m |
-| `open_gripper_position` / `closed_gripper_position` | 夹爪开闭关节位置 |
-| `close_gripper_to_object_width` | 是否按物体宽度计算夹爪闭合位置 |
+| `max_gripper_width` | 夹爪最大总开口，默认 `0.09m` |
+| `open_gripper_position` / `closed_gripper_position` | 仿真夹爪单侧开闭关节位置 |
+| `hardware_open_gripper_position` / `hardware_closed_gripper_position` | 硬件夹爪电机开闭位置 |
+| `grasp_gripper_to_object_width` | 是否按物体宽度计算夹取位置 |
 
 ### MoveIt 配置文件
 
@@ -584,6 +580,40 @@ src/rebotarm_moveit_demos/config/pick_place.yaml
 ---
 
 ## FAQ / 排障
+
+### `ros2: command not found`
+
+当前终端没有 ROS2 环境，或者尚未安装 ROS2。先安装 ROS2，然后在每个新终端中加载对应发行版环境：
+
+```bash
+source /opt/ros/humble/setup.bash
+```
+
+如果使用 Jazzy，将 `humble` 替换为 `jazzy`。
+
+如果希望新终端自动加载 ROS2 环境，可以把 source 命令写入 `~/.bashrc`：
+
+```bash
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+```
+
+### 找不到 ROS2 可执行文件
+
+如果 `ros2 run` 或 `ros2 launch` 找不到 package 或 executable，通常是当前终端没有加载本工作空间。
+需要先构建，再 source 工作空间：
+
+```bash
+cd your/path/to/rebotarm_ros2
+colcon build --symlink-install
+source install/setup.bash
+```
+
+可以用下面的命令检查入口是否已经注册：
+
+```bash
+ros2 pkg executables rebotarmcontroller
+ros2 pkg executables rebotarm_moveit_demos
+```
 
 ### 找不到串口
 

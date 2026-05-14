@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import math
 
-from rebotarm_msgs.srv import MoveToPoseIK, SetGripper, SetMode, SetZero
+from rebotarm_msgs.srv import (
+    GripperCommand,
+    MoveToPoseIK,
+    SetGripper,
+    SetMode,
+    SetZero,
+)
 from std_srvs.srv import Trigger
 
 from .conversions import pose_to_xyz_rpy
+
+_GRIPPER_OPEN_POSITION = -4.9
+_GRIPPER_CLOSE_POSITION = 0.0
 
 
 class ArmServices:
@@ -68,6 +77,18 @@ class ArmServices:
             self.set_gripper,
             callback_group=node.reentrant_group,
         )
+        node.create_service(
+            GripperCommand,
+            self._service("gripper/open"),
+            self.open_gripper,
+            callback_group=node.slow_group,
+        )
+        node.create_service(
+            GripperCommand,
+            self._service("gripper/close"),
+            self.close_gripper,
+            callback_group=node.slow_group,
+        )
 
     def _service(self, name: str) -> str:
         return f"/{self._namespace}/{name}"
@@ -97,9 +118,7 @@ class ArmServices:
 
     def safe_home(self, _request, response):
         try:
-            self._hardware.stop_gravity_compensation()
-            self._hardware.start_endpos_control()
-            self._hardware.endpos_ctrl.safe_home()
+            self._hardware.safe_home()
             response.success = True
             response.message = "safe_home complete"
         except Exception as exc:
@@ -191,7 +210,6 @@ class ArmServices:
         try:
             reached, reached_position = self._hardware.set_gripper_position(
                 request.position,
-                request.max_effort,
             )
             response.success = bool(reached)
             response.reached_position = float(reached_position)
@@ -205,5 +223,51 @@ class ArmServices:
             response.success = False
             response.reached_position = 0.0
             self._node.get_logger().error(f"gripper set failed: {exc}")
+        self._node.publish_arm_status()
+        return response
+
+    def open_gripper(self, request, response):
+        try:
+            target = (
+                _GRIPPER_OPEN_POSITION
+                if request.position == 0.0
+                else float(request.position)
+            )
+            success, position = self._hardware.set_gripper_position(
+                target,
+                timeout=(
+                    request.timeout if request.timeout > 0.0 else 3.0
+                ),
+            )
+            response.success = bool(success)
+            response.reached_position = float(position)
+            response.message = "gripper open complete" if success else "gripper open timeout"
+        except Exception as exc:
+            response.success = False
+            response.reached_position = 0.0
+            response.message = str(exc)
+        self._node.publish_arm_status()
+        return response
+
+    def close_gripper(self, request, response):
+        try:
+            target = (
+                _GRIPPER_CLOSE_POSITION
+                if request.position == 0.0
+                else float(request.position)
+            )
+            success, position = self._hardware.set_gripper_position(
+                target,
+                timeout=(
+                    request.timeout if request.timeout > 0.0 else 3.0
+                ),
+            )
+            response.success = bool(success)
+            response.reached_position = float(position)
+            response.message = "gripper close complete" if success else "gripper close timeout"
+        except Exception as exc:
+            response.success = False
+            response.reached_position = 0.0
+            response.message = str(exc)
         self._node.publish_arm_status()
         return response
