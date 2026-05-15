@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/ROS2-Humble | Jazzy-blue.svg" alt="ROS2 Humble">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python 3.10">
-  <img src="https://img.shields.io/badge/Version-v0.2.2-brightgreen.svg" alt="Version v0.2.2">
+  <img src="https://img.shields.io/badge/Version-v0.2.3-brightgreen.svg" alt="Version v0.2.3">
   <img src="https://img.shields.io/badge/Platform-Ubuntu%2022.04+-orange.svg" alt="Ubuntu 22.04+">
   <img src="https://img.shields.io/badge/Hardware-B601--DM-lightgrey.svg" alt="B601-DM">
 </p>
@@ -28,7 +28,7 @@
 
 ## Overview
 
-Current version: `v0.2.2`
+Current version: `v0.2.3`
 
 `rebotarm_ros2` is the ROS2 SDK workspace for the reBot Arm B601-DM. It wraps the
 existing `reBotArm_control_py` Python control library into ROS2 topics, services
@@ -202,13 +202,17 @@ ros2 launch rebotarm_bringup bringup.launch.py
 ros2 launch rebotarm_bringup bringup.launch.py channel:=/dev/ttyACM1
 ```
 
-Enable RViz:
+Enable RViz to visualize the arm motion:
 
 ```bash
 ros2 launch rebotarm_bringup bringup.launch.py use_rviz:=true
 ```
 
 ### Launch only the driver
+
+Unlike `bringup.launch.py`, this starts only the controller node. Use it when
+you want the minimal hardware control process without `robot_state_publisher`
+or RViz visualization.
 
 ```bash
 ros2 launch rebotarm_bringup driver.launch.py
@@ -219,6 +223,11 @@ ros2 launch rebotarm_bringup driver.launch.py
 ```bash
 ros2 run rebotarmcontroller reBotArmController
 ```
+
+Unlike `driver.launch.py`, which passes configuration files from
+`rebotarm_bringup/config`, running the controller directly falls back to the
+default SDK arm configuration. For normal use, launching through ROS is
+recommended.
 
 ---
 

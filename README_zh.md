@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/ROS2-Humble | Jazzy-blue.svg" alt="ROS2 Humble">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python 3.10">
-  <img src="https://img.shields.io/badge/Version-v0.2.2-brightgreen.svg" alt="Version v0.2.2">
+  <img src="https://img.shields.io/badge/Version-v0.2.3-brightgreen.svg" alt="Version v0.2.3">
   <img src="https://img.shields.io/badge/Platform-Ubuntu%2022.04+-orange.svg" alt="Ubuntu 22.04+">
   <img src="https://img.shields.io/badge/Hardware-B601--DM-lightgrey.svg" alt="B601-DM">
 </p>
@@ -28,7 +28,7 @@
 
 ## 项目介绍
 
-当前版本：`v0.2.2`
+当前版本：`v0.2.3`
 
 `rebotarm_ros2` 是 reBot Arm B601-DM 机械臂的 ROS2 SDK 工作空间。它将现有的
 `reBotArm_control_py` Python 控制库封装为 ROS2 topic、service 和 action，
@@ -204,13 +204,16 @@ ros2 launch rebotarm_bringup bringup.launch.py
 ros2 launch rebotarm_bringup bringup.launch.py channel:={/dev/实际的串口名称}
 ```
 
-启用 RViz：
+如果需要在 RViz 中可视化机械臂运动，可以启用 RViz：
 
 ```bash
 ros2 launch rebotarm_bringup bringup.launch.py use_rviz:=true
 ```
 
 ### 只启动控制节点
+
+和上述```bringup.launch.py```不同，如果希望最小化机械臂控制操作而不启用多余的`robot_state_publisher`
+或者 RViz 可视化，那么可以直接启动：
 
 ```bash
 ros2 launch rebotarm_bringup driver.launch.py
@@ -221,6 +224,9 @@ ros2 launch rebotarm_bringup driver.launch.py
 ```bash
 ros2 run rebotarmcontroller reBotArmController
 ```
+
+需要注意的是，和```driver.launch.py```从```rebotarm_bringup/config```不同，直接运行控制节点会从 SDK 加载
+默认机械臂参数，因此更推荐通过 ros launch 的方式去启动节点。
 
 ---
 
