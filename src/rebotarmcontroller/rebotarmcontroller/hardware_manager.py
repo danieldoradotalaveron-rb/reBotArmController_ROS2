@@ -25,6 +25,11 @@ _GC_W_VEL_THRESHOLD = 0.08
 _GC_EE_FRAME = "end_link"
 _GC_KP = 7.0
 _GC_KD = 0.8
+# Smooth handoff when leaving gravity compensation (MIT + tau_g -> pos_vel).
+_GC_STOP_RAMP_STEPS = 12
+_GC_STOP_RAMP_STEP_S = 0.02
+_GC_STOP_HOLD_KP = 12.0
+_GC_STOP_SETTLE_S = 0.12
 
 # Speed limit (rad/s) used when returning to the rest pose on shutdown.
 _PARK_VLIM = 0.3
@@ -495,6 +500,8 @@ class HardwareManager:
             hold_target = np.asarray(hold_target, dtype=np.float64).copy()
         # Keep ArmEndPos in sync so pos_vel loop never targets q=0.
         self._endpos_ctrl._q_target[:] = hold_target
+        if self._enabled:
+            self._ramp_out_gravity_compensation()
         self._arm.stop_control_loop()
         self._gravity_comp_active = False
         self._gravity_comp_q_target = None
@@ -504,7 +511,48 @@ class HardwareManager:
         if self._enabled:
             self._arm.mode_pos_vel()
             self._start_pos_vel_loop(target=hold_target)
+            self._settle_pos_vel_hold(hold_target)
         self.set_state_machine("IDLE")
+
+    def _ramp_out_gravity_compensation(self) -> None:
+        """Gradually hand off from gravity feedforward MIT to stiff position hold."""
+        n = self._arm.num_joints
+        q_target = (
+            self._gravity_comp_q_target.copy()
+            if self._gravity_comp_q_target is not None
+            else self._arm.get_positions(request=True).copy()
+        )
+        for step in range(1, _GC_STOP_RAMP_STEPS + 1):
+            alpha = step / _GC_STOP_RAMP_STEPS
+            q = self._read_gravity_comp_positions(request=True, reference=q_target)
+            tau_g = self._gc_compute_generalized_gravity(q=q)
+            tau_ff = tau_g
+            if self._gravity_comp_integral is not None:
+                tau_ff = tau_g + self._gravity_comp_integral
+            tau = tau_ff * (1.0 - alpha)
+            kp = _GC_KP + alpha * (_GC_STOP_HOLD_KP - _GC_KP)
+            kd = _GC_KD + alpha * 0.4
+            self._arm.mit(
+                pos=q_target,
+                vel=np.zeros(n),
+                kp=np.full(n, kp),
+                kd=np.full(n, kd),
+                tau=tau,
+                request_feedback=False,
+            )
+            time.sleep(_GC_STOP_RAMP_STEP_S)
+
+    def _settle_pos_vel_hold(self, target: np.ndarray) -> None:
+        """Brief zero-speed hold while pos_vel mode stabilises after a mode switch."""
+        if not self.control_loop_active:
+            return
+        ctrl = self._endpos_ctrl
+        ctrl._q_target[:] = np.asarray(target, dtype=np.float64)
+        ctrl._vlim_override = np.zeros(self._arm.num_joints, dtype=np.float64)
+        try:
+            time.sleep(_GC_STOP_SETTLE_S)
+        finally:
+            ctrl._vlim_override = None
 
     def gravity_compensation_active(self) -> bool:
         return self._gravity_comp_active
