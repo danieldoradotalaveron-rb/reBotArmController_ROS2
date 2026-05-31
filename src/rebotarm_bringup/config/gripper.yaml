@@ -1,4 +1,4 @@
-# reBotArm 夹爪配置文件
+# reBotArm gripper configuration
 
 channel: /dev/ttyACM0
 

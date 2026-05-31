@@ -1,0 +1,17 @@
+# Workspace metadata for the reBot Arm ROS 2 fork.
+# Not an installable Python package — this file just declares dev tooling.
+#
+# Required runner:
+#   sudo apt install just          # Ubuntu 24.04+
+#   cargo install just
+#   https://github.com/casey/just#installation
+
+[project]
+name = "rebotarm-workspace"
+version = "0.0.0"
+description = "Development workspace for the reBot Arm ROS 2 fork"
+requires-python = ">=3.10"
+readme = "CONTRIBUTOR_README.md"
+
+[tool.rebotarm.dev-tools]
+just = ">=1.21.0"

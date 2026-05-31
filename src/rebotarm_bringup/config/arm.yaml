@@ -1,9 +1,9 @@
-# reBotArm 机械臂配置文件
+# reBotArm arm configuration
 
-# 通信方式: CAN (can0 / can1) 或 串口桥 (/dev/ttyACM0)
+# Communication: CAN (can0 / can1) or serial bridge (/dev/ttyACM0)
 channel: /dev/ttyACM0
 
-# 控制循环频率 (Hz)
+# Control loop rate (Hz)
 rate: 100
 
 joints:
