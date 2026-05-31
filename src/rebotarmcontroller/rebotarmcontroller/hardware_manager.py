@@ -26,6 +26,9 @@ _GC_EE_FRAME = "end_link"
 _GC_KP = 7.0
 _GC_KD = 0.8
 
+# Speed limit (rad/s) used when returning to the rest pose on shutdown.
+_PARK_VLIM = 0.3
+
 
 class HardwareManager:
     """Owns the single RobotArm instance used by the ROS driver."""
@@ -80,6 +83,9 @@ class HardwareManager:
         self._gravity_comp_integral: np.ndarray | None = None
         self._gravity_comp_lock_counter = 0
         self._gravity_comp_q_last: np.ndarray | None = None
+        # Captured at connect(): the gravitational rest pose the arm settles into
+        # while unpowered. Shutdown returns here so torque is cut at equilibrium.
+        self._rest_pose: np.ndarray | None = None
 
         self._patch_arm_bus_lock()
 
@@ -178,26 +184,65 @@ class HardwareManager:
         self._arm.mode_pos_vel()
         self._arm.enable()
         self._enabled = True
-        self._start_pos_vel_loop()
+        # Capture rest pose BEFORE starting the pos_vel loop. ArmEndPos defaults
+        # _q_target to zeros (q=0); if the loop starts first, the arm drifts toward
+        # q=0 and we capture the wrong pose for park/shutdown.
+        try:
+            self._rest_pose = self._read_stable_positions()
+            print(
+                "[rebotarm] captured rest pose:",
+                [round(float(v), 4) for v in self._rest_pose],
+                flush=True,
+            )
+        except Exception as exc:
+            self._rest_pose = None
+            print(f"[rebotarm] WARNING: could not capture rest pose: {exc}", flush=True)
+        if self._rest_pose is not None:
+            self._start_pos_vel_loop(target=self._rest_pose)
+        else:
+            self._start_pos_vel_loop()
         self._connected = True
         self.init_gripper(str(self._gripper_cfg_path))
+
+    def _read_stable_positions(
+        self,
+        tries: int = 40,
+        sleep_s: float = 0.05,
+        stable_tol: float = 0.01,
+    ) -> np.ndarray:
+        """Poll joint positions until two consecutive reads agree.
+
+        Guards against the degenerate all-/partial-zero reading that the bus
+        returns before motor feedback is flowing.
+        """
+        last: np.ndarray | None = None
+        for _ in range(tries):
+            q = np.array(self._arm.get_positions(request=True), dtype=np.float64)
+            if last is not None and np.max(np.abs(q - last)) < stable_tol:
+                return q
+            last = q
+            time.sleep(sleep_s)
+        if last is None:
+            raise RuntimeError("no joint feedback available")
+        return last
 
     def shutdown(self) -> None:
         if not self._connected:
             return
         try:
             self._stop_gripper_loop()
-            gravity_comp_active = self._gravity_comp_active
-            self.stop_gravity_compensation()
-            if gravity_comp_active:
-                self.ensure_pos_vel_control()
-            if self._endpos_ctrl._running:
-                self._endpos_ctrl.end()
+            if self._endpos_ctrl._running or self._gravity_comp_active:
+                self._park_at_rest_pose(label="shutdown")
+                self._stop_control_loop()
+                self._arm.disconnect()
             else:
+                self.stop_gravity_compensation()
+                print("[rebotarm shutdown] control loop not running, disconnect only", flush=True)
                 self._arm.disconnect()
         finally:
             self._connected = False
             self._enabled = False
+            self._endpos_ctrl._running = False
 
     def get_joint_state(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         return self._arm.get_state()
@@ -207,6 +252,114 @@ class HardwareManager:
         current = np.array(q, dtype=np.float64, copy=True)
         self._endpos_ctrl._q_target[:] = current
         return current
+
+    def return_to_rest_pose(self) -> None:
+        """Public entry point: drive slowly to the captured rest pose and hold."""
+        self._park_at_rest_pose(label="park")
+
+    def _park_at_rest_pose(self, label: str = "park") -> None:
+        """Same park sequence as driver shutdown: pos_vel return-to-rest."""
+        gc_q = None
+        if self._gravity_comp_active and self._gravity_comp_q_last is not None:
+            gc_q = self._gravity_comp_q_last.copy()
+        self.stop_gravity_compensation(hold_target=gc_q)
+        self.ensure_pos_vel_control()
+        if gc_q is not None:
+            self._endpos_ctrl._q_target[:] = gc_q
+        self._return_to_rest_pose(label=label)
+
+    def _resolve_park_target(
+        self,
+        fallback: np.ndarray,
+        *,
+        tag: str,
+    ) -> np.ndarray:
+        """Return _rest_pose for park, or fallback if rest was never/badly captured."""
+        fb = np.asarray(fallback, dtype=np.float64).reshape(-1)
+        if self._rest_pose is None:
+            print(f"{tag} no captured rest pose, using current joints", flush=True)
+            return fb.copy()
+        rest = np.asarray(self._rest_pose, dtype=np.float64).reshape(-1)
+        # Reject degenerate capture (pos_vel loop started at q=0 before we fixed connect).
+        if float(np.max(np.abs(rest))) < 0.08 and float(np.max(np.abs(fb))) > 0.12:
+            print(
+                f"{tag} WARNING: rest pose looks like bad q=0 capture,",
+                f"rest={[round(float(v), 4) for v in rest]},",
+                f"using current={[round(float(v), 4) for v in fb]}",
+                flush=True,
+            )
+            return fb.copy()
+        return rest.copy()
+
+    @staticmethod
+    def _max_joint_error(q: np.ndarray, target: np.ndarray) -> float:
+        delta = np.asarray(target, dtype=np.float64) - np.asarray(q, dtype=np.float64)
+        delta = (delta + np.pi) % (2.0 * np.pi) - np.pi
+        return float(np.max(np.abs(delta)))
+
+    def _return_to_rest_pose(
+        self,
+        vlim: float = _PARK_VLIM,
+        timeout: float = 30.0,
+        tol: float = 0.02,
+        label: str = "shutdown",
+    ) -> None:
+        """Drive slowly to the rest pose captured at connect(), then return.
+
+        Reuses safe_home's speed limiting but targets the captured gravitational
+        rest pose instead of q=0. Blocks until the arm reaches it (within tol) or
+        timeout elapses, so the caller can disconnect without dropping the arm.
+        If no rest pose was captured, holds the current pose as a safe fallback.
+        """
+        tag = f"[rebotarm {label}]"
+        self.ensure_pos_vel_control()
+        if not self.control_loop_active:
+            print(f"{tag} WARNING: control loop inactive, cannot park", flush=True)
+            return
+        ctrl = self._endpos_ctrl
+
+        if self._rest_pose is None:
+            print(f"{tag} no captured rest pose, holding current", flush=True)
+            self.hold_current_position()
+            time.sleep(0.2)
+            return
+
+        q_now, _, _ = self.get_joint_state()
+        target = self._resolve_park_target(
+            np.asarray(q_now, dtype=np.float64),
+            tag=tag,
+        )
+        print(
+            f"{tag} returning to rest:",
+            f"q_now={[round(float(v), 4) for v in q_now]}",
+            f"target={[round(float(v), 4) for v in target]}",
+            flush=True,
+        )
+
+        # Stop any in-flight trajectory send thread first (same as safe_home).
+        ctrl._stop_send.set()
+        send_thread = ctrl._send_thread
+        if send_thread is not None and send_thread.is_alive():
+            send_thread.join(timeout=2.0)
+        ctrl._moving = False
+
+        ctrl._vlim_override = np.full(len(target), float(vlim), dtype=np.float64)
+        ctrl._q_target[:] = target
+        dt = getattr(ctrl, "_dt", 0.01) or 0.01
+        deadline = time.monotonic() + float(timeout)
+        try:
+            while True:
+                q, _, _ = self.get_joint_state()
+                err = self._max_joint_error(q, target)
+                if err < tol:
+                    print(f"{tag} back at rest (err={err:.4f} rad)", flush=True)
+                    break
+                if time.monotonic() > deadline:
+                    print(f"{tag} rest timeout (err={err:.4f} rad)", flush=True)
+                    break
+                time.sleep(dt)
+        finally:
+            ctrl._vlim_override = None
 
     def enable(self) -> None:
         from motorbridge import Mode
@@ -325,14 +478,23 @@ class HardwareManager:
         self._arm.start_control_loop(self._gravity_comp_tick, rate=self._arm._rate)
         self.set_state_machine("GRAVITY_COMP")
 
-    def stop_gravity_compensation(self) -> None:
+    def stop_gravity_compensation(
+        self,
+        *,
+        hold_target: np.ndarray | None = None,
+    ) -> None:
         if not self._gravity_comp_active:
             return
-        hold_target = (
-            self._gravity_comp_q_last.copy()
-            if self._gravity_comp_q_last is not None
-            else None
-        )
+        if hold_target is None:
+            hold_target = (
+                self._gravity_comp_q_last.copy()
+                if self._gravity_comp_q_last is not None
+                else self._arm.get_positions(request=True).copy()
+            )
+        else:
+            hold_target = np.asarray(hold_target, dtype=np.float64).copy()
+        # Keep ArmEndPos in sync so pos_vel loop never targets q=0.
+        self._endpos_ctrl._q_target[:] = hold_target
         self._arm.stop_control_loop()
         self._gravity_comp_active = False
         self._gravity_comp_q_target = None
