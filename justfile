@@ -13,6 +13,7 @@
 #   just run-rqt                              # terminal 3
 #   just svc-park
 #   just run-gravity                          # terminal 4 (Ctrl+C → park + disable)
+#   just svc-gravity-start / svc-gravity-stop
 #
 # If your ROS distro is not Jazzy, edit `ros_setup` below.
 
@@ -65,6 +66,12 @@ svc-enable:
 
 svc-disable:
     bash -c '{{src_driver}} && ros2 service call /rebotarm/disable std_srvs/srv/Trigger {}'
+
+svc-gravity-start:
+    bash -c '{{src_driver}} && ros2 service call /rebotarm/gravity_compensation/start std_srvs/srv/Trigger {}'
+
+svc-gravity-stop:
+    bash -c '{{src_driver}} && ros2 service call /rebotarm/gravity_compensation/stop std_srvs/srv/Trigger {}'
 
 # --- Tests -------------------------------------------------------------------
 
