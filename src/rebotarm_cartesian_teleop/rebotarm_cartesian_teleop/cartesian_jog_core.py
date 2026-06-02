@@ -4,6 +4,13 @@ import rclpy
 from rclpy.node import Node
 from rebotarm_msgs.msg import CartesianJogCmd, CartesianJogState
 
+from .jog_core_logic import (
+    WorkspaceLimits,
+    build_cartesian_jog_state,
+    compute_state_name,
+    integrate_target_pose,
+)
+
 
 class CartesianJogCore(Node):
     def __init__(self):
@@ -35,20 +42,22 @@ class CartesianJogCore(Node):
         self.command_timeout_s = float(self.get_parameter("command_timeout_s").value)
         self.servo_hz = float(self.get_parameter("servo_hz").value)
 
-        self.workspace_x_min = float(self.get_parameter("workspace_x_min").value)
-        self.workspace_x_max = float(self.get_parameter("workspace_x_max").value)
-        self.workspace_y_min = float(self.get_parameter("workspace_y_min").value)
-        self.workspace_y_max = float(self.get_parameter("workspace_y_max").value)
-        self.workspace_z_min = float(self.get_parameter("workspace_z_min").value)
-        self.workspace_z_max = float(self.get_parameter("workspace_z_max").value)
+        self._workspace = WorkspaceLimits(
+            x_min=float(self.get_parameter("workspace_x_min").value),
+            x_max=float(self.get_parameter("workspace_x_max").value),
+            y_min=float(self.get_parameter("workspace_y_min").value),
+            y_max=float(self.get_parameter("workspace_y_max").value),
+            z_min=float(self.get_parameter("workspace_z_min").value),
+            z_max=float(self.get_parameter("workspace_z_max").value),
+        )
 
         self.target_x = float(self.get_parameter("initial_x").value)
         self.target_y = float(self.get_parameter("initial_y").value)
         self.target_z = float(self.get_parameter("initial_z").value)
 
         self.latest_cmd = None
-        self.latest_cmd_time = None
-        self.last_tick_time = self.get_clock().now()
+        self.latest_cmd_time_ns = None
+        self.last_tick_time_ns = self.get_clock().now().nanoseconds
         self.last_clamp_reason = ""
 
         self.subscription = self.create_subscription(
@@ -72,133 +81,55 @@ class CartesianJogCore(Node):
         self.get_logger().info(f"Output mode: {self.output_mode}")
         self.get_logger().info(f"Dry run: {self.dry_run}")
         self.get_logger().info(
-            f"Initial target pose: x={self.target_x:.3f}, y={self.target_y:.3f}, z={self.target_z:.3f}"
+            "Initial target pose: "
+            f"x={self.target_x:.3f}, y={self.target_y:.3f}, z={self.target_z:.3f}"
         )
 
     def on_cmd(self, msg: CartesianJogCmd):
         self.latest_cmd = msg
-        self.latest_cmd_time = self.get_clock().now()
+        self.latest_cmd_time_ns = self.get_clock().now().nanoseconds
 
     def get_command_age(self) -> float:
-        if self.latest_cmd_time is None:
+        if self.latest_cmd_time_ns is None:
             return math.inf
 
-        now = self.get_clock().now()
-        age_ns = (now - self.latest_cmd_time).nanoseconds
-        return age_ns / 1e9
-
-    def compute_state_name(self, command_age: float) -> str:
-        if self.latest_cmd is None:
-            return "IDLE"
-
-        if command_age > self.command_timeout_s:
-            return "TIMEOUT"
-
-        if self.latest_cmd.soft_stop:
-            return "SOFT_STOP"
-
-        if not self.latest_cmd.deadman:
-            return "DEADMAN_UP"
-
-        return "ACTIVE"
-
-    def clamp(self, value: float, min_value: float, max_value: float):
-        if value < min_value:
-            return min_value, True
-        if value > max_value:
-            return max_value, True
-        return value, False
-
-    def integrate_target_pose(self, dt: float, state_name: str):
-        self.last_clamp_reason = ""
-
-        if state_name != "ACTIVE":
-            return
-
-        vx = float(self.latest_cmd.linear.x)
-        vy = float(self.latest_cmd.linear.y)
-        vz = float(self.latest_cmd.linear.z)
-
-        self.target_x += vx * dt
-        self.target_y += vy * dt
-        self.target_z += vz * dt
-
-        clamp_reasons = []
-
-        self.target_x, clamped_x = self.clamp(
-            self.target_x,
-            self.workspace_x_min,
-            self.workspace_x_max,
-        )
-        self.target_y, clamped_y = self.clamp(
-            self.target_y,
-            self.workspace_y_min,
-            self.workspace_y_max,
-        )
-        self.target_z, clamped_z = self.clamp(
-            self.target_z,
-            self.workspace_z_min,
-            self.workspace_z_max,
-        )
-
-        if clamped_x:
-            clamp_reasons.append("WORKSPACE_X")
-        if clamped_y:
-            clamp_reasons.append("WORKSPACE_Y")
-        if clamped_z:
-            clamp_reasons.append("WORKSPACE_Z")
-
-        self.last_clamp_reason = ",".join(clamp_reasons)
+        now_ns = self.get_clock().now().nanoseconds
+        return (now_ns - self.latest_cmd_time_ns) / 1e9
 
     def tick(self):
-        now = self.get_clock().now()
-        dt = (now - self.last_tick_time).nanoseconds / 1e9
-        self.last_tick_time = now
+        now_ns = self.get_clock().now().nanoseconds
+        dt = (now_ns - self.last_tick_time_ns) / 1e9
+        self.last_tick_time_ns = now_ns
 
         command_age = self.get_command_age()
-        state_name = self.compute_state_name(command_age)
+        state_name = compute_state_name(
+            self.latest_cmd,
+            command_age,
+            self.command_timeout_s,
+        )
 
-        self.integrate_target_pose(dt, state_name)
-        self.publish_state(command_age, state_name)
+        self.target_x, self.target_y, self.target_z, self.last_clamp_reason = integrate_target_pose(
+            self.target_x,
+            self.target_y,
+            self.target_z,
+            self.latest_cmd,
+            dt,
+            state_name,
+            self._workspace,
+        )
 
-    def publish_state(self, command_age: float, state_name: str):
-        msg = CartesianJogState()
+        msg = build_cartesian_jog_state(
+            state_name=state_name,
+            target_x=self.target_x,
+            target_y=self.target_y,
+            target_z=self.target_z,
+            latest_cmd=self.latest_cmd,
+            clamp_reason=self.last_clamp_reason,
+            dry_run=self.dry_run,
+            output_mode=self.output_mode,
+            command_age=command_age,
+        )
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "base_link"
-
-        msg.state = state_name
-
-        msg.current_pose.position.x = self.target_x
-        msg.current_pose.position.y = self.target_y
-        msg.current_pose.position.z = self.target_z
-        msg.current_pose.orientation.w = 1.0
-
-        msg.target_pose.position.x = self.target_x
-        msg.target_pose.position.y = self.target_y
-        msg.target_pose.position.z = self.target_z
-        msg.target_pose.orientation.w = 1.0
-
-        if self.latest_cmd is not None:
-            msg.commanded_twist.linear = self.latest_cmd.linear
-            msg.commanded_twist.angular = self.latest_cmd.angular
-
-        msg.q_current = []
-        msg.q_target = []
-
-        msg.ik_success = False
-        msg.rejection_reason = ""
-        msg.clamp_reason = self.last_clamp_reason
-        msg.dry_run = self.dry_run
-        msg.output_mode = self.output_mode
-        msg.command_age_s = command_age if command_age != math.inf else -1.0
-
-        if state_name == "TIMEOUT":
-            msg.rejection_reason = "COMMAND_TIMEOUT"
-        elif state_name == "DEADMAN_UP":
-            msg.rejection_reason = "DEADMAN_UP"
-        elif state_name == "SOFT_STOP":
-            msg.rejection_reason = "SOFT_STOP"
-
         self.publisher.publish(msg)
 
 
