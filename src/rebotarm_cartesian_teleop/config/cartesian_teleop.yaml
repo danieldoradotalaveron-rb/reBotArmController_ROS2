@@ -1,0 +1,22 @@
+joy_cartesian_mapper:
+  ros__parameters:
+    joy_topic: /joy
+    cartesian_jog_cmd_topic: /rebotarm/cartesian_jog_cmd
+
+    axis_x: 1
+    axis_y: 0
+    axis_z: 5
+
+    invert_x: false
+    invert_y: false
+    invert_z: false
+
+    deadzone: 0.15
+    max_linear_velocity_m_s: 0.03
+
+    deadman_button: 4
+    soft_stop_button: 2
+    speed_boost_button: 5
+
+    speed_scale_default: 1.0
+    speed_scale_boost: 1.5
