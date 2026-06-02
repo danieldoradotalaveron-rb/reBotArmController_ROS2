@@ -16,6 +16,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MoveToPoseIK.srv"
   "srv/SetGripper.srv"
   "action/MoveToPose.action"
+  "msg/CartesianJogCmd.msg"
+  "msg/CartesianJogState.msg"
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs
 )
 
