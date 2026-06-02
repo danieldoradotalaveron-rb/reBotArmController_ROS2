@@ -29,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'joy_cartesian_mapper = rebotarm_cartesian_teleop.joy_cartesian_mapper:main',
+            'cartesian_jog_core = rebotarm_cartesian_teleop.cartesian_jog_core:main',
         ],
     },
 )

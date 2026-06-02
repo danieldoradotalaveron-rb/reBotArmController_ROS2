@@ -12,6 +12,7 @@ joy_cartesian_mapper:
     invert_z: false
 
     deadzone: 0.15
+    joy_timeout_s: 0.3
     max_linear_velocity_m_s: 0.03
 
     deadman_button: 4
@@ -20,3 +21,7 @@ joy_cartesian_mapper:
 
     speed_scale_default: 1.0
     speed_scale_boost: 1.5
+
+cartesian_jog_core:
+  ros__parameters:
+    command_timeout_s: 0.3

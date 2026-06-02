@@ -20,6 +20,7 @@ class JoyCartesianMapper(Node):
         self.declare_parameter("invert_z", False)
 
         self.declare_parameter("deadzone", 0.15)
+        self.declare_parameter("joy_timeout_s", 0.3)
         self.declare_parameter("max_linear_velocity_m_s", 0.03)
 
         self.declare_parameter("deadman_button", 4)
@@ -41,6 +42,7 @@ class JoyCartesianMapper(Node):
         self.invert_z = bool(self.get_parameter("invert_z").value)
 
         self.deadzone = float(self.get_parameter("deadzone").value)
+        self.joy_timeout_s = float(self.get_parameter("joy_timeout_s").value)
         self.max_linear_velocity = float(self.get_parameter("max_linear_velocity_m_s").value)
 
         self.deadman_button = int(self.get_parameter("deadman_button").value)
@@ -51,6 +53,7 @@ class JoyCartesianMapper(Node):
         self.speed_scale_boost = float(self.get_parameter("speed_scale_boost").value)
 
         self.latest_joy = None
+        self.latest_joy_time = None
 
         self.subscription = self.create_subscription(
             Joy,
@@ -74,9 +77,11 @@ class JoyCartesianMapper(Node):
         self.get_logger().info(f"Deadman button: {self.deadman_button}")
         self.get_logger().info(f"Soft stop button: {self.soft_stop_button}")
         self.get_logger().info(f"Speed boost button: {self.speed_boost_button}")
+        self.get_logger().info(f"Joy timeout: {self.joy_timeout_s}s")
 
     def on_joy(self, msg: Joy):
         self.latest_joy = msg
+        self.latest_joy_time = self.get_clock().now()
         self.get_logger().info(
             f"Joy received: axes={len(msg.axes)} buttons={len(msg.buttons)}",
             throttle_duration_sec=2.0,
@@ -108,7 +113,22 @@ class JoyCartesianMapper(Node):
 
         return value
 
+    def is_joy_fresh(self) -> bool:
+        if self.latest_joy_time is None:
+            return False
+
+        now = self.get_clock().now()
+        age_ns = (now - self.latest_joy_time).nanoseconds
+        return (age_ns / 1e9) <= self.joy_timeout_s
+
     def publish_cmd(self):
+        if not self.is_joy_fresh():
+            self.get_logger().warn(
+                "Joy input timeout; not publishing CartesianJogCmd",
+                throttle_duration_sec=2.0,
+            )
+            return
+
         msg = CartesianJogCmd()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "base_link"
