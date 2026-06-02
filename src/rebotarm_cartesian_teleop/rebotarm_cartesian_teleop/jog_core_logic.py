@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from geometry_msgs.msg import Pose
 from rebotarm_msgs.msg import CartesianJogCmd, CartesianJogState
 
 
@@ -103,15 +104,21 @@ def build_cartesian_jog_state(
     dry_run: bool,
     output_mode: str,
     command_age: float,
+    current_pose: Pose | None = None,
+    q_current: list[float] | None = None,
+    fk_error: str = "",
 ) -> CartesianJogState:
     msg = CartesianJogState()
     msg.header.frame_id = "base_link"
     msg.state = state_name
 
-    msg.current_pose.position.x = target_x
-    msg.current_pose.position.y = target_y
-    msg.current_pose.position.z = target_z
-    msg.current_pose.orientation.w = 1.0
+    if current_pose is not None:
+        msg.current_pose = current_pose
+    else:
+        msg.current_pose.position.x = target_x
+        msg.current_pose.position.y = target_y
+        msg.current_pose.position.z = target_z
+        msg.current_pose.orientation.w = 1.0
 
     msg.target_pose.position.x = target_x
     msg.target_pose.position.y = target_y
@@ -122,10 +129,13 @@ def build_cartesian_jog_state(
         msg.commanded_twist.linear = latest_cmd.linear
         msg.commanded_twist.angular = latest_cmd.angular
 
-    msg.q_current = []
+    msg.q_current = [float(v) for v in q_current] if q_current is not None else []
     msg.q_target = []
     msg.ik_success = False
-    msg.rejection_reason = rejection_reason_for_state(state_name)
+    if fk_error:
+        msg.rejection_reason = fk_error
+    else:
+        msg.rejection_reason = rejection_reason_for_state(state_name)
     msg.clamp_reason = clamp_reason
     msg.dry_run = dry_run
     msg.output_mode = output_mode

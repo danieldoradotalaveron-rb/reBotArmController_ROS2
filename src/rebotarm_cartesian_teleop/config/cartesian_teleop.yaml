@@ -41,3 +41,7 @@ cartesian_jog_core:
     workspace_y_max: 0.25
     workspace_z_min: 0.05
     workspace_z_max: 0.45
+
+    urdf_path: ""
+    ee_frame: end_link
+    initial_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

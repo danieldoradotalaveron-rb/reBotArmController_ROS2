@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from rebotarm_msgs.msg import CartesianJogCmd, CartesianJogState
 
+from .fk_kinematics import FkContext, compute_fk_pose, init_fk_context
 from .jog_core_logic import (
     WorkspaceLimits,
     build_cartesian_jog_state,
@@ -34,6 +35,10 @@ class CartesianJogCore(Node):
         self.declare_parameter("workspace_z_min", 0.05)
         self.declare_parameter("workspace_z_max", 0.45)
 
+        self.declare_parameter("urdf_path", "")
+        self.declare_parameter("ee_frame", "end_link")
+        self.declare_parameter("initial_q", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
         cmd_topic = self.get_parameter("cartesian_jog_cmd_topic").value
         state_topic = self.get_parameter("cartesian_jog_state_topic").value
 
@@ -55,10 +60,26 @@ class CartesianJogCore(Node):
         self.target_y = float(self.get_parameter("initial_y").value)
         self.target_z = float(self.get_parameter("initial_z").value)
 
+        urdf_path = str(self.get_parameter("urdf_path").value)
+        ee_frame = str(self.get_parameter("ee_frame").value)
+        initial_q = [float(v) for v in self.get_parameter("initial_q").value]
+
+        self._fk: FkContext = init_fk_context(urdf_path, ee_frame, initial_q)
+        if self._fk.ok:
+            self.get_logger().info(
+                f"FK model loaded (nq={self._fk.model.nq}, frame={self._fk.ee_frame})"
+            )
+            if self._fk.q_current is not None:
+                q_str = ", ".join(f"{v:.4f}" for v in self._fk.q_current)
+                self.get_logger().info(f"initial_q: [{q_str}]")
+        else:
+            self.get_logger().error(f"FK init failed: {self._fk.error}")
+
         self.latest_cmd = None
         self.latest_cmd_time_ns = None
         self.last_tick_time_ns = self.get_clock().now().nanoseconds
         self.last_clamp_reason = ""
+        self._fk_tick_error = ""
 
         self.subscription = self.create_subscription(
             CartesianJogCmd,
@@ -96,6 +117,27 @@ class CartesianJogCore(Node):
         now_ns = self.get_clock().now().nanoseconds
         return (now_ns - self.latest_cmd_time_ns) / 1e9
 
+    def _fk_error_reason(self) -> str:
+        if not self._fk.ok:
+            return self._fk.error
+        return self._fk_tick_error
+
+    def _current_pose_and_q(self):
+        fk_error = self._fk_error_reason()
+        if fk_error:
+            return None, None, fk_error
+
+        pose, tick_error = compute_fk_pose(self._fk)
+        if tick_error:
+            self._fk_tick_error = tick_error
+            return None, None, tick_error
+        self._fk_tick_error = ""
+
+        q_list = None
+        if self._fk.q_current is not None:
+            q_list = [float(v) for v in self._fk.q_current]
+        return pose, q_list, ""
+
     def tick(self):
         now_ns = self.get_clock().now().nanoseconds
         dt = (now_ns - self.last_tick_time_ns) / 1e9
@@ -118,6 +160,8 @@ class CartesianJogCore(Node):
             self._workspace,
         )
 
+        current_pose, q_current, fk_error = self._current_pose_and_q()
+
         msg = build_cartesian_jog_state(
             state_name=state_name,
             target_x=self.target_x,
@@ -128,6 +172,9 @@ class CartesianJogCore(Node):
             dry_run=self.dry_run,
             output_mode=self.output_mode,
             command_age=command_age,
+            current_pose=current_pose,
+            q_current=q_current,
+            fk_error=fk_error,
         )
         msg.header.stamp = self.get_clock().now().to_msg()
         self.publisher.publish(msg)
