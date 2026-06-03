@@ -45,3 +45,8 @@ cartesian_jog_core:
     urdf_path: ""
     ee_frame: end_link
     initial_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    ik_max_iterations: 100
+    ik_tolerance: 0.001
+    max_ik_error: 0.005
+    max_joint_delta_rad: 0.25

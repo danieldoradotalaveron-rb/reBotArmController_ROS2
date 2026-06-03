@@ -78,3 +78,13 @@ def compute_ik_for_pose(
         iterations=int(result.iterations),
         reason="",
     )
+
+
+def joint_delta_within_limit(
+    q_target: list[float],
+    q_seed: np.ndarray,
+    max_joint_delta_rad: float,
+) -> bool:
+    q_t = np.asarray(q_target, dtype=np.float64)
+    q_s = np.asarray(q_seed, dtype=np.float64).reshape(q_t.shape)
+    return float(np.max(np.abs(q_t - q_s))) <= float(max_joint_delta_rad)

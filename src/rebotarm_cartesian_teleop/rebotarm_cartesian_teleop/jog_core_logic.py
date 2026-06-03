@@ -5,8 +5,21 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
 from geometry_msgs.msg import Pose
 from rebotarm_msgs.msg import CartesianJogCmd, CartesianJogState
+
+from .fk_kinematics import FkContext
+from .fk_pose import pose_to_rotation_matrix
+from .ik_kinematics import compute_ik_for_pose, joint_delta_within_limit
+
+
+@dataclass(frozen=True)
+class IkConfig:
+    max_iterations: int
+    tolerance: float
+    max_ik_error: float
+    max_joint_delta_rad: float
 
 
 @dataclass(frozen=True)
@@ -37,6 +50,15 @@ def compute_state_name(
         return "DEADMAN_UP"
 
     return "ACTIVE"
+
+
+def resolve_rejection_reason(state_name: str, fk_error: str, ik_reason: str) -> str:
+    state_reason = rejection_reason_for_state(state_name)
+    if state_reason:
+        return state_reason
+    if fk_error:
+        return fk_error
+    return ik_reason
 
 
 def rejection_reason_for_state(state_name: str) -> str:
@@ -93,6 +115,66 @@ def integrate_target_pose(
     return target_x, target_y, target_z, ",".join(clamp_reasons)
 
 
+def solve_target_ik(
+    *,
+    fk_ctx: FkContext,
+    state_name: str,
+    target_x: float,
+    target_y: float,
+    target_z: float,
+    current_pose: Pose | None,
+    ik_config: IkConfig,
+    last_q_target: list[float] | None,
+) -> tuple[list[float], bool, str, list[float] | None]:
+    """Compute q_target from integrated target position and FK orientation."""
+    if state_name != "ACTIVE" or not fk_ctx.ok or current_pose is None:
+        return [], False, "", last_q_target
+
+    if (
+        fk_ctx.model is None
+        or fk_ctx.data is None
+        or fk_ctx.end_frame_id is None
+        or fk_ctx.q_current is None
+    ):
+        return [], False, "", last_q_target
+
+    target_pos = np.array([target_x, target_y, target_z], dtype=np.float64)
+    target_rot = pose_to_rotation_matrix(current_pose)
+
+    if last_q_target is not None and len(last_q_target) == fk_ctx.model.nq:
+        q_seed = np.asarray(last_q_target, dtype=np.float64)
+    else:
+        q_seed = fk_ctx.q_current.copy()
+
+    ik_result = compute_ik_for_pose(
+        fk_ctx.model,
+        fk_ctx.data,
+        fk_ctx.end_frame_id,
+        target_pos,
+        target_rot,
+        q_seed,
+        ik_config.max_iterations,
+        ik_config.tolerance,
+        ik_config.max_ik_error,
+    )
+
+    if not ik_result.success:
+        return [], False, ik_result.reason, last_q_target
+
+    if len(ik_result.q_target) != fk_ctx.model.nq:
+        return [], False, "INVALID_IK_RESULT", last_q_target
+
+    if not joint_delta_within_limit(
+        ik_result.q_target,
+        q_seed,
+        ik_config.max_joint_delta_rad,
+    ):
+        return [], False, "JOINT_DELTA_TOO_LARGE", last_q_target
+
+    new_last = list(ik_result.q_target)
+    return new_last, True, "", new_last
+
+
 def build_cartesian_jog_state(
     *,
     state_name: str,
@@ -106,7 +188,10 @@ def build_cartesian_jog_state(
     command_age: float,
     current_pose: Pose | None = None,
     q_current: list[float] | None = None,
+    q_target: list[float] | None = None,
+    ik_success: bool = False,
     fk_error: str = "",
+    ik_reason: str = "",
 ) -> CartesianJogState:
     msg = CartesianJogState()
     msg.header.frame_id = "base_link"
@@ -130,12 +215,9 @@ def build_cartesian_jog_state(
         msg.commanded_twist.angular = latest_cmd.angular
 
     msg.q_current = [float(v) for v in q_current] if q_current is not None else []
-    msg.q_target = []
-    msg.ik_success = False
-    if fk_error:
-        msg.rejection_reason = fk_error
-    else:
-        msg.rejection_reason = rejection_reason_for_state(state_name)
+    msg.q_target = [float(v) for v in q_target] if q_target is not None else []
+    msg.ik_success = bool(ik_success)
+    msg.rejection_reason = resolve_rejection_reason(state_name, fk_error, ik_reason)
     msg.clamp_reason = clamp_reason
     msg.dry_run = dry_run
     msg.output_mode = output_mode

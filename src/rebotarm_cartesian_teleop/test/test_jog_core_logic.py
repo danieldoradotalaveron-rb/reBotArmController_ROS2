@@ -13,6 +13,7 @@ from rebotarm_cartesian_teleop.jog_core_logic import (
     compute_state_name,
     integrate_target_pose,
     rejection_reason_for_state,
+    resolve_rejection_reason,
 )
 
 
@@ -116,5 +117,9 @@ def test_output_fields_on_state_message():
     assert len(msg.q_current) == 0
     assert len(msg.q_target) == 0
     assert msg.ik_success is False
-    assert msg.rejection_reason == ""
+    assert msg.rejection_reason == resolve_rejection_reason("ACTIVE", "", "")
     assert msg.command_age_s == pytest.approx(0.05)
+
+
+def test_rejection_fk_error_before_ik_on_active():
+    assert resolve_rejection_reason("ACTIVE", "FK_NOT_READY", "IK_FAILED") == "FK_NOT_READY"

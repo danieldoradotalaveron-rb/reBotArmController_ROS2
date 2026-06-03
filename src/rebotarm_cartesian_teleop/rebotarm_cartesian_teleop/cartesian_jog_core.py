@@ -4,12 +4,14 @@ import rclpy
 from rclpy.node import Node
 from rebotarm_msgs.msg import CartesianJogCmd, CartesianJogState
 
-from .fk_kinematics import FkContext, compute_fk_pose, init_fk_context
+from .fk_kinematics import FkContext, compute_fk_pose, init_fk_context, initial_target_pose_from_fk
 from .jog_core_logic import (
+    IkConfig,
     WorkspaceLimits,
     build_cartesian_jog_state,
     compute_state_name,
     integrate_target_pose,
+    solve_target_ik,
 )
 
 
@@ -39,6 +41,11 @@ class CartesianJogCore(Node):
         self.declare_parameter("ee_frame", "end_link")
         self.declare_parameter("initial_q", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
+        self.declare_parameter("ik_max_iterations", 100)
+        self.declare_parameter("ik_tolerance", 0.001)
+        self.declare_parameter("max_ik_error", 0.005)
+        self.declare_parameter("max_joint_delta_rad", 0.25)
+
         cmd_topic = self.get_parameter("cartesian_jog_cmd_topic").value
         state_topic = self.get_parameter("cartesian_jog_state_topic").value
 
@@ -56,9 +63,9 @@ class CartesianJogCore(Node):
             z_max=float(self.get_parameter("workspace_z_max").value),
         )
 
-        self.target_x = float(self.get_parameter("initial_x").value)
-        self.target_y = float(self.get_parameter("initial_y").value)
-        self.target_z = float(self.get_parameter("initial_z").value)
+        fallback_x = float(self.get_parameter("initial_x").value)
+        fallback_y = float(self.get_parameter("initial_y").value)
+        fallback_z = float(self.get_parameter("initial_z").value)
 
         urdf_path = str(self.get_parameter("urdf_path").value)
         ee_frame = str(self.get_parameter("ee_frame").value)
@@ -75,11 +82,35 @@ class CartesianJogCore(Node):
         else:
             self.get_logger().error(f"FK init failed: {self._fk.error}")
 
+        target_init = initial_target_pose_from_fk(self._fk, fallback_x, fallback_y, fallback_z)
+        self.target_x = target_init.x
+        self.target_y = target_init.y
+        self.target_z = target_init.z
+        if target_init.from_fk:
+            self.get_logger().info(
+                "Initial target_pose from FK(q_current): "
+                f"x={self.target_x:.3f}, y={self.target_y:.3f}, z={self.target_z:.3f}"
+            )
+        else:
+            self.get_logger().warn(
+                "Initial target_pose using YAML fallback "
+                f"({target_init.fallback_reason}): "
+                f"x={self.target_x:.3f}, y={self.target_y:.3f}, z={self.target_z:.3f}"
+            )
+
         self.latest_cmd = None
         self.latest_cmd_time_ns = None
         self.last_tick_time_ns = self.get_clock().now().nanoseconds
         self.last_clamp_reason = ""
         self._fk_tick_error = ""
+        self._last_q_target: list[float] | None = None
+
+        self._ik_config = IkConfig(
+            max_iterations=int(self.get_parameter("ik_max_iterations").value),
+            tolerance=float(self.get_parameter("ik_tolerance").value),
+            max_ik_error=float(self.get_parameter("max_ik_error").value),
+            max_joint_delta_rad=float(self.get_parameter("max_joint_delta_rad").value),
+        )
 
         self.subscription = self.create_subscription(
             CartesianJogCmd,
@@ -162,6 +193,17 @@ class CartesianJogCore(Node):
 
         current_pose, q_current, fk_error = self._current_pose_and_q()
 
+        q_target, ik_success, ik_reason, self._last_q_target = solve_target_ik(
+            fk_ctx=self._fk,
+            state_name=state_name,
+            target_x=self.target_x,
+            target_y=self.target_y,
+            target_z=self.target_z,
+            current_pose=current_pose,
+            ik_config=self._ik_config,
+            last_q_target=self._last_q_target,
+        )
+
         msg = build_cartesian_jog_state(
             state_name=state_name,
             target_x=self.target_x,
@@ -174,7 +216,10 @@ class CartesianJogCore(Node):
             command_age=command_age,
             current_pose=current_pose,
             q_current=q_current,
+            q_target=q_target,
+            ik_success=ik_success,
             fk_error=fk_error,
+            ik_reason=ik_reason,
         )
         msg.header.stamp = self.get_clock().now().to_msg()
         self.publisher.publish(msg)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from geometry_msgs.msg import Pose
-from tf_transformations import quaternion_from_matrix
+from tf_transformations import quaternion_from_matrix, quaternion_matrix
 
 
 def fk_arrays_to_pose(position: np.ndarray, rotation: np.ndarray) -> Pose:
@@ -21,3 +21,14 @@ def fk_arrays_to_pose(position: np.ndarray, rotation: np.ndarray) -> Pose:
     pose.orientation.z = float(quat[2])
     pose.orientation.w = float(quat[3])
     return pose
+
+
+def pose_to_rotation_matrix(pose: Pose) -> np.ndarray:
+    quat = [
+        float(pose.orientation.x),
+        float(pose.orientation.y),
+        float(pose.orientation.z),
+        float(pose.orientation.w),
+    ]
+    mat = quaternion_matrix(quat)
+    return np.asarray(mat[:3, :3], dtype=np.float64)

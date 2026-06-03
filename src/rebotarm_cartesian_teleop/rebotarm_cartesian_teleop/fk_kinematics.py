@@ -18,6 +18,8 @@ class FkContext:
     ok: bool
     error: str
     model: Any | None
+    data: Any | None
+    end_frame_id: int | None
     q_current: np.ndarray | None
     ee_frame: str
 
@@ -46,7 +48,7 @@ def init_fk_context(
     try:
         ensure_rebot_sdk_in_syspath()
     except FileNotFoundError:
-        return FkContext(False, "SDK_NOT_FOUND", None, None, ee_frame)
+        return FkContext(False, "SDK_NOT_FOUND", None, None, None, None, ee_frame)
 
     from reBotArm_control_py.kinematics import load_robot_model
 
@@ -56,20 +58,58 @@ def init_fk_context(
             model = load_robot_model()
         else:
             if not os.path.isfile(resolved):
-                return FkContext(False, "FK_MODEL_LOAD_FAILED", None, None, ee_frame)
+                return FkContext(False, "FK_MODEL_LOAD_FAILED", None, None, None, None, ee_frame)
             model = load_robot_model(resolved)
     except Exception:
-        return FkContext(False, "FK_MODEL_LOAD_FAILED", None, None, ee_frame)
+        return FkContext(False, "FK_MODEL_LOAD_FAILED", None, None, None, None, ee_frame)
 
     if not model.existFrame(ee_frame):
-        return FkContext(False, "MISSING_EE_FRAME", model, None, ee_frame)
+        return FkContext(False, "MISSING_EE_FRAME", model, None, None, None, ee_frame)
 
     q_list = [float(v) for v in initial_q]
     if len(q_list) != model.nq:
-        return FkContext(False, "INVALID_INITIAL_Q", model, None, ee_frame)
+        return FkContext(False, "INVALID_INITIAL_Q", model, None, None, None, ee_frame)
 
     q_current = np.array(q_list, dtype=np.float64)
-    return FkContext(True, "", model, q_current, ee_frame)
+    data = model.createData()
+    end_frame_id = int(model.getFrameId(ee_frame))
+    return FkContext(True, "", model, data, end_frame_id, q_current, ee_frame)
+
+
+@dataclass(frozen=True)
+class InitialTargetPose:
+    x: float
+    y: float
+    z: float
+    from_fk: bool
+    fallback_reason: str
+
+
+def initial_target_pose_from_fk(
+    fk_ctx: FkContext,
+    fallback_x: float,
+    fallback_y: float,
+    fallback_z: float,
+) -> InitialTargetPose:
+    """Initialize conceptual target position from FK(q_current) or YAML fallback."""
+    pose, fk_error = compute_fk_pose(fk_ctx)
+    if pose is not None and not fk_error:
+        return InitialTargetPose(
+            x=float(pose.position.x),
+            y=float(pose.position.y),
+            z=float(pose.position.z),
+            from_fk=True,
+            fallback_reason="",
+        )
+
+    reason = fk_error or fk_ctx.error or "FK_NOT_READY"
+    return InitialTargetPose(
+        x=float(fallback_x),
+        y=float(fallback_y),
+        z=float(fallback_z),
+        from_fk=False,
+        fallback_reason=reason,
+    )
 
 
 def compute_fk_pose(ctx: FkContext) -> tuple[Pose | None, str]:
