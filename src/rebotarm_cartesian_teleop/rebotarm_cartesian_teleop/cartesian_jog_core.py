@@ -12,6 +12,18 @@ from .fk_kinematics import (
     compute_fk_pose_for_q,
     init_fk_context,
 )
+from .ik_kinematics import compute_ik_for_pose
+from .ik_quality_diagnostics import (
+    IkQualityLogConfig,
+    candidate_step_m,
+    compute_joint_quality_diagnostics,
+    format_ik_quality_diagnostics,
+    joint_limits_from_model,
+    joint_names_from_model,
+    pos3_from_pose,
+    should_log_ik_quality_diagnostics,
+    with_log_reasons,
+)
 from .jog_core_logic import (
     IkConfig,
     WorkspaceLimits,
@@ -59,6 +71,13 @@ class CartesianJogCore(Node):
         self.declare_parameter("max_joint_delta_rad", 0.25)
         self.declare_parameter("ik_failure_log_interval_s", 1.0)
         self.declare_parameter("candidate_drift_log_threshold_m", 0.001)
+        self.declare_parameter("joint_limit_warn_margin_rad", 0.35)
+        self.declare_parameter("joint5_warn_abs_rad", 1.0)
+        self.declare_parameter("joint4_warn_abs_rad", 1.0)
+        self.declare_parameter("q_delta_warn_rad", 0.15)
+        self.declare_parameter("candidate_drift_warn_m", 0.003)
+        self.declare_parameter("reached_step_warn_min_m", 0.0001)
+        self.declare_parameter("ik_quality_log_interval_s", 1.0)
         self.declare_parameter("publish_fake_joint_states", True)
         self.declare_parameter("fake_joint_states_topic", "/rebotarm/fake_joint_states")
         self.declare_parameter("fake_joint_state_hz", 50.0)
@@ -83,6 +102,7 @@ class CartesianJogCore(Node):
         urdf_path = str(self.get_parameter("urdf_path").value)
         ee_frame = str(self.get_parameter("ee_frame").value)
         initial_q = [float(v) for v in self.get_parameter("initial_q").value]
+        self._initial_q = np.asarray(initial_q, dtype=np.float64)
 
         self._fk: FkContext = init_fk_context(urdf_path, ee_frame, initial_q)
         if self._fk.ok:
@@ -136,7 +156,30 @@ class CartesianJogCore(Node):
         self._candidate_drift_log_threshold_m = float(
             self.get_parameter("candidate_drift_log_threshold_m").value
         )
+        self._ik_quality_log_config = IkQualityLogConfig(
+            joint_limit_warn_margin_rad=float(
+                self.get_parameter("joint_limit_warn_margin_rad").value
+            ),
+            joint5_warn_abs_rad=float(self.get_parameter("joint5_warn_abs_rad").value),
+            joint4_warn_abs_rad=float(self.get_parameter("joint4_warn_abs_rad").value),
+            q_delta_warn_rad=float(self.get_parameter("q_delta_warn_rad").value),
+            candidate_drift_warn_m=float(self.get_parameter("candidate_drift_warn_m").value),
+            reached_step_warn_min_m=float(self.get_parameter("reached_step_warn_min_m").value),
+        )
+        self._ik_quality_log_interval_s = float(
+            self.get_parameter("ik_quality_log_interval_s").value
+        )
         self._last_ik_failure_log_ns = 0
+        self._last_ik_quality_log_ns = 0
+
+        self._joint_names: list[str] = []
+        self._joint_lower_limits: list[float] = []
+        self._joint_upper_limits: list[float] = []
+        if self._fk.ok and self._fk.model is not None:
+            self._joint_names = joint_names_from_model(self._fk.model)
+            lo, hi = joint_limits_from_model(self._fk.model)
+            self._joint_lower_limits = lo
+            self._joint_upper_limits = hi
 
         self._publish_fake_joint_states = bool(
             self.get_parameter("publish_fake_joint_states").value
@@ -228,6 +271,108 @@ class CartesianJogCore(Node):
         self._last_ik_failure_log_ns = now_ns
         self.get_logger().warn(format_ik_failure_log(diag))
 
+    def _maybe_log_ik_quality(
+        self,
+        *,
+        q_before: np.ndarray,
+        q_target: np.ndarray,
+        fk_position_before: tuple[float, float, float],
+        fk_position_target: tuple[float, float, float],
+        candidate_x: float,
+        candidate_y: float,
+        candidate_z: float,
+        candidate_drift_m: float,
+        now_ns: int,
+        ik_failure: bool = False,
+        resolve_ik_error=None,
+    ) -> None:
+        if not self._joint_names:
+            return
+
+        cand_step = candidate_step_m(
+            fk_position_before,
+            (candidate_x, candidate_y, candidate_z),
+        )
+        diag = compute_joint_quality_diagnostics(
+            self._joint_names,
+            q_before,
+            q_target,
+            self._joint_lower_limits,
+            self._joint_upper_limits,
+            self._initial_q,
+            fk_position_before=fk_position_before,
+            fk_position_target=fk_position_target,
+            candidate_drift_m=candidate_drift_m,
+            ik_error=0.0,
+            candidate_step_m=cand_step,
+            joint_limit_near_rad=self._ik_quality_log_config.joint_limit_warn_margin_rad,
+        )
+        if not should_log_ik_quality_diagnostics(
+            diag, self._ik_quality_log_config, ik_failure=ik_failure
+        ):
+            return
+
+        interval_ns = int(self._ik_quality_log_interval_s * 1e9)
+        if now_ns - self._last_ik_quality_log_ns < interval_ns:
+            return
+        self._last_ik_quality_log_ns = now_ns
+
+        ik_error = 0.0
+        if resolve_ik_error is not None:
+            ik_error = float(resolve_ik_error())
+        diag = compute_joint_quality_diagnostics(
+            self._joint_names,
+            q_before,
+            q_target,
+            self._joint_lower_limits,
+            self._joint_upper_limits,
+            self._initial_q,
+            fk_position_before=fk_position_before,
+            fk_position_target=fk_position_target,
+            candidate_drift_m=candidate_drift_m,
+            ik_error=ik_error,
+            candidate_step_m=cand_step,
+            joint_limit_near_rad=self._ik_quality_log_config.joint_limit_warn_margin_rad,
+        )
+        diag = with_log_reasons(
+            diag, self._ik_quality_log_config, ik_failure=ik_failure
+        )
+        self.get_logger().warn(format_ik_quality_diagnostics(diag))
+
+    def _resolve_ik_error_for_log(
+        self,
+        *,
+        ik_failure: bool,
+        ik_failure_diag,
+        candidate_x: float,
+        candidate_y: float,
+        candidate_z: float,
+        sim_rotation: np.ndarray | None,
+        q_seed: np.ndarray,
+    ) -> float:
+        if ik_failure and ik_failure_diag is not None and ik_failure_diag.ik_error is not None:
+            return float(ik_failure_diag.ik_error)
+        if (
+            not self._fk.ok
+            or self._fk.model is None
+            or self._fk.data is None
+            or self._fk.end_frame_id is None
+            or sim_rotation is None
+        ):
+            return 0.0
+        ik_result = compute_ik_for_pose(
+            self._fk.model,
+            self._fk.data,
+            self._fk.end_frame_id,
+            np.array([candidate_x, candidate_y, candidate_z], dtype=np.float64),
+            sim_rotation,
+            q_seed,
+            self._ik_config.max_iterations,
+            self._ik_config.tolerance,
+            self._ik_config.max_ik_error,
+        )
+        return float(ik_result.error)
+
     def _publish_fake_joint_state(self) -> None:
         if self._fake_joint_states_publisher is None:
             return
@@ -279,6 +424,10 @@ class CartesianJogCore(Node):
         ik_success = False
         ik_reason = ""
         ik_failure_diag = None
+        q_before_ik = np.asarray(self._q_sim, dtype=np.float64).copy()
+        fk_position_before = (
+            pos3_from_pose(current_pose) if current_pose is not None else (sim_x, sim_y, sim_z)
+        )
 
         if (
             state_name == "ACTIVE"
@@ -301,6 +450,29 @@ class CartesianJogCore(Node):
             )
             self._maybe_log_ik_failure(ik_failure_diag, now_ns)
 
+            if not ik_success:
+                self._maybe_log_ik_quality(
+                    q_before=q_before_ik,
+                    q_target=q_before_ik,
+                    fk_position_before=fk_position_before,
+                    fk_position_target=fk_position_before,
+                    candidate_x=candidate_x,
+                    candidate_y=candidate_y,
+                    candidate_z=candidate_z,
+                    candidate_drift_m=0.0,
+                    now_ns=now_ns,
+                    ik_failure=True,
+                    resolve_ik_error=lambda: self._resolve_ik_error_for_log(
+                        ik_failure=True,
+                        ik_failure_diag=ik_failure_diag,
+                        candidate_x=candidate_x,
+                        candidate_y=candidate_y,
+                        candidate_z=candidate_z,
+                        sim_rotation=sim_rotation,
+                        q_seed=q_before_ik,
+                    ),
+                )
+
         if ik_success:
             drift_m = compute_candidate_drift_m(
                 self._fk,
@@ -308,6 +480,34 @@ class CartesianJogCore(Node):
                 candidate_y,
                 candidate_z,
                 q_target,
+            )
+            q_target_arr = np.asarray(q_target, dtype=np.float64)
+            fk_target_pose, _, fk_target_err = compute_fk_pose_for_q(self._fk, q_target_arr)
+            fk_position_target = (
+                pos3_from_pose(fk_target_pose)
+                if fk_target_pose is not None and not fk_target_err
+                else fk_position_before
+            )
+            self._maybe_log_ik_quality(
+                q_before=q_before_ik,
+                q_target=q_target_arr,
+                fk_position_before=fk_position_before,
+                fk_position_target=fk_position_target,
+                candidate_x=candidate_x,
+                candidate_y=candidate_y,
+                candidate_z=candidate_z,
+                candidate_drift_m=drift_m,
+                now_ns=now_ns,
+                ik_failure=False,
+                resolve_ik_error=lambda: self._resolve_ik_error_for_log(
+                    ik_failure=False,
+                    ik_failure_diag=None,
+                    candidate_x=candidate_x,
+                    candidate_y=candidate_y,
+                    candidate_z=candidate_z,
+                    sim_rotation=sim_rotation,
+                    q_seed=q_before_ik,
+                ),
             )
             self._q_sim = update_q_sim_on_ik_success(self._q_sim, q_target, True)
             (
