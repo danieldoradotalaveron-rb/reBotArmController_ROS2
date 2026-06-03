@@ -10,6 +10,7 @@ from .jog_core_logic import (
     WorkspaceLimits,
     build_cartesian_jog_state,
     compute_state_name,
+    format_ik_failure_log,
     integrate_target_pose,
     solve_target_ik,
 )
@@ -45,6 +46,7 @@ class CartesianJogCore(Node):
         self.declare_parameter("ik_tolerance", 0.001)
         self.declare_parameter("max_ik_error", 0.005)
         self.declare_parameter("max_joint_delta_rad", 0.25)
+        self.declare_parameter("ik_failure_log_interval_s", 1.0)
 
         cmd_topic = self.get_parameter("cartesian_jog_cmd_topic").value
         state_topic = self.get_parameter("cartesian_jog_state_topic").value
@@ -104,6 +106,10 @@ class CartesianJogCore(Node):
         self.last_clamp_reason = ""
         self._fk_tick_error = ""
         self._last_q_target: list[float] | None = None
+        self._ik_failure_log_interval_s = float(
+            self.get_parameter("ik_failure_log_interval_s").value
+        )
+        self._last_ik_failure_log_ns = 0
 
         self._ik_config = IkConfig(
             max_iterations=int(self.get_parameter("ik_max_iterations").value),
@@ -169,6 +175,15 @@ class CartesianJogCore(Node):
             q_list = [float(v) for v in self._fk.q_current]
         return pose, q_list, ""
 
+    def _maybe_log_ik_failure(self, diag, now_ns: int) -> None:
+        if diag is None:
+            return
+        interval_ns = int(self._ik_failure_log_interval_s * 1e9)
+        if now_ns - self._last_ik_failure_log_ns < interval_ns:
+            return
+        self._last_ik_failure_log_ns = now_ns
+        self.get_logger().warn(format_ik_failure_log(diag))
+
     def tick(self):
         now_ns = self.get_clock().now().nanoseconds
         dt = (now_ns - self.last_tick_time_ns) / 1e9
@@ -193,7 +208,7 @@ class CartesianJogCore(Node):
 
         current_pose, q_current, fk_error = self._current_pose_and_q()
 
-        q_target, ik_success, ik_reason, self._last_q_target = solve_target_ik(
+        q_target, ik_success, ik_reason, self._last_q_target, ik_failure_diag = solve_target_ik(
             fk_ctx=self._fk,
             state_name=state_name,
             target_x=self.target_x,
@@ -202,7 +217,9 @@ class CartesianJogCore(Node):
             current_pose=current_pose,
             ik_config=self._ik_config,
             last_q_target=self._last_q_target,
+            clamp_reason=self.last_clamp_reason,
         )
+        self._maybe_log_ik_failure(ik_failure_diag, now_ns)
 
         msg = build_cartesian_jog_state(
             state_name=state_name,

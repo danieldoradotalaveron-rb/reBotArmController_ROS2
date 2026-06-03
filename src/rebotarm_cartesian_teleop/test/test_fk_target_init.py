@@ -61,7 +61,7 @@ def test_aligned_initial_target_ik_succeeds_neutral():
         max_ik_error=0.005,
         max_joint_delta_rad=0.25,
     )
-    q_target, ik_success, ik_reason, _ = solve_target_ik(
+    q_target, ik_success, ik_reason, _, _ = solve_target_ik(
         fk_ctx=fk_ctx,
         state_name="ACTIVE",
         target_x=init.x,

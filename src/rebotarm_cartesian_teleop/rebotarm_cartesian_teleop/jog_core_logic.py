@@ -23,6 +23,36 @@ class IkConfig:
 
 
 @dataclass(frozen=True)
+class IkFailureDiagnostics:
+    rejection_reason: str
+    target_position: tuple[float, float, float]
+    seed_q: tuple[float, ...]
+    ik_error: float | None
+    ik_iterations: int | None
+    max_ik_error: float
+    max_joint_delta_rad: float
+    clamp_reason: str
+    state: str
+    target_rotation_from_fk: bool
+
+
+def format_ik_failure_log(diag: IkFailureDiagnostics) -> str:
+    tx, ty, tz = diag.target_position
+    seed_str = ", ".join(f"{v:.4f}" for v in diag.seed_q)
+    ik_error_str = f"{diag.ik_error:.6f}" if diag.ik_error is not None else "n/a"
+    ik_iter_str = str(diag.ik_iterations) if diag.ik_iterations is not None else "n/a"
+    clamp_str = diag.clamp_reason if diag.clamp_reason else "(none)"
+    rot_src = "FK current_pose" if diag.target_rotation_from_fk else "other"
+    return (
+        f"IK failure: reason={diag.rejection_reason} state={diag.state} "
+        f"target=({tx:.4f}, {ty:.4f}, {tz:.4f}) seed_q=[{seed_str}] "
+        f"ik_error={ik_error_str} ik_iterations={ik_iter_str} "
+        f"max_ik_error={diag.max_ik_error:.6f} max_joint_delta_rad={diag.max_joint_delta_rad:.4f} "
+        f"clamp_reason={clamp_str} target_rotation={rot_src}"
+    )
+
+
+@dataclass(frozen=True)
 class WorkspaceLimits:
     x_min: float
     x_max: float
@@ -115,6 +145,33 @@ def integrate_target_pose(
     return target_x, target_y, target_z, ",".join(clamp_reasons)
 
 
+def _ik_failure_diagnostics(
+    *,
+    reason: str,
+    target_x: float,
+    target_y: float,
+    target_z: float,
+    q_seed: np.ndarray,
+    ik_config: IkConfig,
+    state_name: str,
+    clamp_reason: str,
+    ik_error: float | None = None,
+    ik_iterations: int | None = None,
+) -> IkFailureDiagnostics:
+    return IkFailureDiagnostics(
+        rejection_reason=reason,
+        target_position=(target_x, target_y, target_z),
+        seed_q=tuple(float(v) for v in q_seed),
+        ik_error=ik_error,
+        ik_iterations=ik_iterations,
+        max_ik_error=ik_config.max_ik_error,
+        max_joint_delta_rad=ik_config.max_joint_delta_rad,
+        clamp_reason=clamp_reason,
+        state=state_name,
+        target_rotation_from_fk=True,
+    )
+
+
 def solve_target_ik(
     *,
     fk_ctx: FkContext,
@@ -125,10 +182,11 @@ def solve_target_ik(
     current_pose: Pose | None,
     ik_config: IkConfig,
     last_q_target: list[float] | None,
-) -> tuple[list[float], bool, str, list[float] | None]:
+    clamp_reason: str = "",
+) -> tuple[list[float], bool, str, list[float] | None, IkFailureDiagnostics | None]:
     """Compute q_target from integrated target position and FK orientation."""
     if state_name != "ACTIVE" or not fk_ctx.ok or current_pose is None:
-        return [], False, "", last_q_target
+        return [], False, "", last_q_target, None
 
     if (
         fk_ctx.model is None
@@ -136,7 +194,7 @@ def solve_target_ik(
         or fk_ctx.end_frame_id is None
         or fk_ctx.q_current is None
     ):
-        return [], False, "", last_q_target
+        return [], False, "", last_q_target, None
 
     target_pos = np.array([target_x, target_y, target_z], dtype=np.float64)
     target_rot = pose_to_rotation_matrix(current_pose)
@@ -159,20 +217,56 @@ def solve_target_ik(
     )
 
     if not ik_result.success:
-        return [], False, ik_result.reason, last_q_target
+        diag = _ik_failure_diagnostics(
+            reason=ik_result.reason,
+            target_x=target_x,
+            target_y=target_y,
+            target_z=target_z,
+            q_seed=q_seed,
+            ik_config=ik_config,
+            state_name=state_name,
+            clamp_reason=clamp_reason,
+            ik_error=ik_result.error,
+            ik_iterations=ik_result.iterations,
+        )
+        return [], False, ik_result.reason, last_q_target, diag
 
     if len(ik_result.q_target) != fk_ctx.model.nq:
-        return [], False, "INVALID_IK_RESULT", last_q_target
+        diag = _ik_failure_diagnostics(
+            reason="INVALID_IK_RESULT",
+            target_x=target_x,
+            target_y=target_y,
+            target_z=target_z,
+            q_seed=q_seed,
+            ik_config=ik_config,
+            state_name=state_name,
+            clamp_reason=clamp_reason,
+            ik_error=ik_result.error,
+            ik_iterations=ik_result.iterations,
+        )
+        return [], False, "INVALID_IK_RESULT", last_q_target, diag
 
     if not joint_delta_within_limit(
         ik_result.q_target,
         q_seed,
         ik_config.max_joint_delta_rad,
     ):
-        return [], False, "JOINT_DELTA_TOO_LARGE", last_q_target
+        diag = _ik_failure_diagnostics(
+            reason="JOINT_DELTA_TOO_LARGE",
+            target_x=target_x,
+            target_y=target_y,
+            target_z=target_z,
+            q_seed=q_seed,
+            ik_config=ik_config,
+            state_name=state_name,
+            clamp_reason=clamp_reason,
+            ik_error=ik_result.error,
+            ik_iterations=ik_result.iterations,
+        )
+        return [], False, "JOINT_DELTA_TOO_LARGE", last_q_target, diag
 
     new_last = list(ik_result.q_target)
-    return new_last, True, "", new_last
+    return new_last, True, "", new_last, None
 
 
 def build_cartesian_jog_state(

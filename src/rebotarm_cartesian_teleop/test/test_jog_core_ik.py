@@ -48,7 +48,7 @@ def test_solve_target_ik_at_fk_position_succeeds(fk_ctx, ik_config):
     assert err == ""
     assert pose is not None
 
-    q_target, ik_success, ik_reason, last = solve_target_ik(
+    q_target, ik_success, ik_reason, last, _ = solve_target_ik(
         fk_ctx=fk_ctx,
         state_name="ACTIVE",
         target_x=pose.position.x,
@@ -67,7 +67,7 @@ def test_solve_target_ik_at_fk_position_succeeds(fk_ctx, ik_config):
 
 def test_solve_target_ik_not_run_when_deadman_up(fk_ctx, ik_config):
     pose, _ = compute_fk_pose(fk_ctx)
-    q_target, ik_success, ik_reason, last = solve_target_ik(
+    q_target, ik_success, ik_reason, last, _ = solve_target_ik(
         fk_ctx=fk_ctx,
         state_name="DEADMAN_UP",
         target_x=0.3,
@@ -91,7 +91,7 @@ def test_joint_delta_rejects_large_step(fk_ctx, ik_config):
         max_ik_error=ik_config.max_ik_error,
         max_joint_delta_rad=1e-6,
     )
-    q_target, ik_success, ik_reason, _ = solve_target_ik(
+    q_target, ik_success, ik_reason, _, _ = solve_target_ik(
         fk_ctx=fk_ctx,
         state_name="ACTIVE",
         target_x=0.45,
@@ -124,7 +124,7 @@ def test_rejection_active_uses_ik_reason():
 
 def test_build_state_active_ik_success_fields(fk_ctx, ik_config):
     pose, _ = compute_fk_pose(fk_ctx)
-    q_target, ik_success, ik_reason, _ = solve_target_ik(
+    q_target, ik_success, ik_reason, _, _ = solve_target_ik(
         fk_ctx=fk_ctx,
         state_name="ACTIVE",
         target_x=pose.position.x,
