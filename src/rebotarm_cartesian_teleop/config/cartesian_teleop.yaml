@@ -50,3 +50,7 @@ cartesian_jog_core:
     ik_tolerance: 0.001
     max_ik_error: 0.005
     max_joint_delta_rad: 0.25
+
+    publish_fake_joint_states: true
+    fake_joint_states_topic: /rebotarm/fake_joint_states
+    fake_joint_state_hz: 50.0
