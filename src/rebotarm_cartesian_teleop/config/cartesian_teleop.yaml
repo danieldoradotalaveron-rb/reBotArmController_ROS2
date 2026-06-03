@@ -44,7 +44,8 @@ cartesian_jog_core:
     workspace_x_max: 0.45
     workspace_y_min: -0.25
     workspace_y_max: 0.25
-    workspace_z_min: 0.05
+    # Simulation floor validation. For hardware, set according to real table/base clearance.
+    workspace_z_min: 0.02
     workspace_z_max: 0.45
 
     urdf_path: ""
@@ -77,13 +78,23 @@ cartesian_jog_core:
     fake_joint_states_topic: /rebotarm/fake_joint_states
     fake_joint_state_hz: 50.0
 
+teleop_viz_markers:
+  ros__parameters:
+    cartesian_jog_state_topic: /rebotarm/cartesian_jog_state
+    markers_topic: /rebotarm/teleop_viz/markers
+    fixed_frame: base_link
+    axis_length_m: 0.04
+    axis_line_width_m: 0.0025
+    sphere_diameter_m: 0.008
+
 teleop_validation_targets:
   ros__parameters:
     cartesian_jog_state_topic: /rebotarm/cartesian_jog_state
     markers_topic: /rebotarm/teleop_viz/validation_targets
     fixed_frame: base_link
     validation_targets_enabled: true
-    validation_target_radius_m: 0.025
+    validation_target_radius_m: 0.03
     validation_target_persistent_hit: false
     # Flat xyz list (ROS2 params cannot use nested - [x, y, z] sequences).
-    validation_targets: [0.30, 0.00, 0.27, 0.35, 0.10, 0.27, 0.35, -0.10, 0.27, 0.30, 0.00, 0.35, 0.40, 0.00, 0.20]
+    # Elevated targets (z > workspace floor) plus floor grid at z=workspace_z_min for reach tests.
+    validation_targets: [0.30, 0.00, 0.27, 0.35, 0.10, 0.27, 0.35, -0.10, 0.27, 0.30, 0.00, 0.35, 0.40, 0.00, 0.20, 0.28, 0.00, 0.02, 0.32, 0.00, 0.02, 0.36, 0.00, 0.02, 0.30, 0.12, 0.02, 0.30, -0.12, 0.02, 0.36, 0.10, 0.02, 0.36, -0.10, 0.02, 0.28, 0.10, 0.02, 0.28, -0.10, 0.02]

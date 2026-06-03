@@ -9,8 +9,8 @@ from geometry_msgs.msg import Pose
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
-GREY_COLOR = ColorRGBA(r=0.55, g=0.55, b=0.55, a=0.55)
-RED_COLOR = ColorRGBA(r=1.0, g=0.15, b=0.15, a=0.85)
+BLUE_COLOR = ColorRGBA(r=0.2, g=0.45, b=0.95, a=0.65)
+HIT_GREY_COLOR = ColorRGBA(r=0.55, g=0.55, b=0.55, a=0.75)
 VALIDATION_TARGET_NS = "teleop_validation_target"
 
 
@@ -136,7 +136,7 @@ def build_validation_target_markers(
         marker.scale.x = diameter
         marker.scale.y = diameter
         marker.scale.z = diameter
-        marker.color = RED_COLOR if hit_flags[index] else GREY_COLOR
+        marker.color = HIT_GREY_COLOR if hit_flags[index] else BLUE_COLOR
         array.markers.append(marker)
 
     return array

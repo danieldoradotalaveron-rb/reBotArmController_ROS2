@@ -16,8 +16,9 @@ from visualization_msgs.msg import Marker, MarkerArray
 class TeleopVizConfig:
     trail_max_samples: int = 200
     trail_min_step_m: float = 0.0002
-    axis_length_m: float = 0.06
-    sphere_diameter_m: float = 0.012
+    axis_length_m: float = 0.04
+    axis_line_width_m: float = 0.0025
+    sphere_diameter_m: float = 0.008
 
 
 @dataclass
@@ -92,6 +93,7 @@ def _pose_axis_line_marker(
     ns: str,
     pose: Pose,
     axis_length: float,
+    axis_line_width: float,
     frame_id: str,
     alpha: float,
 ) -> Marker:
@@ -110,7 +112,7 @@ def _pose_axis_line_marker(
     marker.type = Marker.LINE_LIST
     marker.action = Marker.ADD
     marker.pose.orientation.w = 1.0
-    marker.scale.x = 0.004
+    marker.scale.x = float(axis_line_width)
 
     for axis_idx, rgb in enumerate(axis_colors):
         end = origin + rot[:, axis_idx] * axis_length
@@ -186,6 +188,7 @@ def build_teleop_marker_array(
         ns="teleop_current_axes",
         pose=current_pose,
         axis_length=config.axis_length_m,
+        axis_line_width=config.axis_line_width_m,
         frame_id=frame_id,
         alpha=0.95,
     )
@@ -194,6 +197,7 @@ def build_teleop_marker_array(
         ns="teleop_target_axes",
         pose=target_pose,
         axis_length=config.axis_length_m * 0.85,
+        axis_line_width=config.axis_line_width_m,
         frame_id=frame_id,
         alpha=0.7,
     )
@@ -226,8 +230,9 @@ def main() -> None:
     node.declare_parameter("fixed_frame", "base_link")
     node.declare_parameter("trail_max_samples", 200)
     node.declare_parameter("trail_min_step_m", 0.0002)
-    node.declare_parameter("axis_length_m", 0.06)
-    node.declare_parameter("sphere_diameter_m", 0.012)
+    node.declare_parameter("axis_length_m", 0.04)
+    node.declare_parameter("axis_line_width_m", 0.0025)
+    node.declare_parameter("sphere_diameter_m", 0.008)
 
     state_topic = str(node.get_parameter("cartesian_jog_state_topic").value)
     markers_topic = str(node.get_parameter("markers_topic").value)
@@ -236,6 +241,7 @@ def main() -> None:
         trail_max_samples=int(node.get_parameter("trail_max_samples").value),
         trail_min_step_m=float(node.get_parameter("trail_min_step_m").value),
         axis_length_m=float(node.get_parameter("axis_length_m").value),
+        axis_line_width_m=float(node.get_parameter("axis_line_width_m").value),
         sphere_diameter_m=float(node.get_parameter("sphere_diameter_m").value),
     )
     trail = TcpTrailState(viz_config.trail_max_samples, viz_config.trail_min_step_m)

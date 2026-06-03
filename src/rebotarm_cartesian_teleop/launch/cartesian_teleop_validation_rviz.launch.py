@@ -9,8 +9,8 @@ Validation workflow:
   1. In RViz Views panel, select saved view ``TeleopBaseValidation`` (or ``TeleopTopDownZ``).
   2. Do not orbit the camera while testing axis motion.
   3. Jog one axis at a time (+X, -X, +Y, -Y, +Z, -Z in base_link).
-  4. Judge TCP motion via green sphere + blue trail vs base_link grid/axes.
-  5. Guide the green TCP sphere into grey validation targets; they turn red on contact.
+  4. Judge TCP motion via the small green TCP sphere + blue trail vs base_link grid/axes.
+  5. Guide the TCP into blue validation targets; they turn grey on contact.
 """
 
 from launch.actions import DeclareLaunchArgument
@@ -27,7 +27,6 @@ def generate_launch_description():
     teleop_share = FindPackageShare("rebotarm_cartesian_teleop")
 
     fake_joint_states_topic = LaunchConfiguration("fake_joint_states_topic")
-    cartesian_jog_state_topic = LaunchConfiguration("cartesian_jog_state_topic")
 
     urdf_file = PathJoinSubstitution(
         [bringup_share, "description", "urdf", "reBot-DevArm_fixend.urdf"]
@@ -46,10 +45,6 @@ def generate_launch_description():
                 "fake_joint_states_topic",
                 default_value="/rebotarm/fake_joint_states",
             ),
-            DeclareLaunchArgument(
-                "cartesian_jog_state_topic",
-                default_value="/rebotarm/cartesian_jog_state",
-            ),
             Node(
                 package="robot_state_publisher",
                 executable="robot_state_publisher",
@@ -63,9 +58,7 @@ def generate_launch_description():
                 executable="teleop_viz_markers",
                 name="teleop_viz_markers",
                 output="screen",
-                parameters=[
-                    {"cartesian_jog_state_topic": cartesian_jog_state_topic},
-                ],
+                parameters=[teleop_params],
             ),
             Node(
                 package="rebotarm_cartesian_teleop",

@@ -53,16 +53,16 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Axes
       Enabled: true
-      Length: 0.25
+      Length: 0.15
       Name: BaseLinkAxes
-      Radius: 0.012
+      Radius: 0.006
       Reference Frame: base_link
       Value: true
     - Class: rviz_default_plugins/Axes
       Enabled: true
-      Length: 0.12
+      Length: 0.08
       Name: EndLinkAxes
-      Radius: 0.008
+      Radius: 0.005
       Reference Frame: end_link
       Value: true
     - Alpha: 0.85
@@ -99,7 +99,7 @@ Visualization Manager:
           Value: true
         end_link:
           Value: true
-      Marker Scale: 0.1
+      Marker Scale: 0.05
       Name: TF
       Show Arrows: false
       Show Axes: true

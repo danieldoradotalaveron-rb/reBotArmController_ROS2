@@ -93,6 +93,15 @@ def test_workspace_clamp_z():
     assert "WORKSPACE_Z" in reason
 
 
+def test_workspace_clamp_z_sim_floor():
+    """Simulation config uses workspace_z_min=0.02 for floor reach validation."""
+    ws = default_workspace(z_min=0.02, z_max=0.45)
+    cmd = make_cmd(linear_z=-10.0)
+    _, _, z, reason = integrate_target_pose(0.30, 0.0, 0.03, cmd, 1.0, "ACTIVE", ws)
+    assert z == pytest.approx(0.02)
+    assert reason == "WORKSPACE_Z"
+
+
 def test_clamp_helper():
     assert clamp(0.5, 0.0, 1.0) == (0.5, False)
     assert clamp(-1.0, 0.0, 1.0) == (0.0, True)

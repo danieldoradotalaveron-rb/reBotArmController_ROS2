@@ -32,7 +32,7 @@ def default_workspace(**overrides) -> WorkspaceLimits:
         "x_max": 0.45,
         "y_min": -0.25,
         "y_max": 0.25,
-        "z_min": 0.05,
+        "z_min": 0.02,
         "z_max": 0.45,
     }
     params.update(overrides)

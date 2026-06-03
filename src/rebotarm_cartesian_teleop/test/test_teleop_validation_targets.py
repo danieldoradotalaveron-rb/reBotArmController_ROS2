@@ -31,20 +31,20 @@ def test_distance_below_radius_marks_target_hit():
     assert is_target_hit(tcp_distance_to_target(0.30, 0.01, 0.27, TARGET), 0.025)
 
 
-def test_distance_above_radius_leaves_target_grey():
+def test_distance_above_radius_leaves_target_blue():
     tracker = ValidationHitTracker.create(1, persistent_hit=False)
     flags = tracker.update(0.30, 0.10, 0.27, (TARGET,), 0.025)
     assert flags == [False]
 
 
-def test_persistent_hit_false_returns_to_grey_after_leaving():
+def test_persistent_hit_false_returns_to_blue_after_leaving():
     tracker = ValidationHitTracker.create(1, persistent_hit=False)
     tracker.update(0.30, 0.0, 0.27, (TARGET,), 0.025)
     flags = tracker.update(0.30, 0.10, 0.27, (TARGET,), 0.025)
     assert flags == [False]
 
 
-def test_persistent_hit_true_keeps_target_red_after_first_contact():
+def test_persistent_hit_true_keeps_target_grey_after_first_contact():
     tracker = ValidationHitTracker.create(1, persistent_hit=True)
     tracker.update(0.30, 0.0, 0.27, (TARGET,), 0.025)
     flags = tracker.update(0.30, 0.10, 0.27, (TARGET,), 0.025)
@@ -66,9 +66,11 @@ def test_marker_count_matches_configured_targets():
     )
     assert len(array.markers) == 3
     assert [m.id for m in array.markers] == [0, 1, 2]
-    assert array.markers[1].color.r > 0.9
-    assert array.markers[0].color.g > 0.5
-    assert array.markers[2].color.g > 0.5
+    assert array.markers[1].color.b > 0.5
+    assert array.markers[1].color.r > 0.4
+    assert array.markers[1].color.g > 0.4
+    assert array.markers[0].color.b > 0.9
+    assert array.markers[2].color.b > 0.9
 
 
 def test_disabled_mode_publishes_empty_marker_array():
