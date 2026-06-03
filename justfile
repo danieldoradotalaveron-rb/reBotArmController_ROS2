@@ -83,6 +83,9 @@ run-joy-mapper:
 run-cartesian-core:
     bash -c '{{src_driver}} && ros2 run rebotarm_cartesian_teleop cartesian_jog_core --ros-args --params-file {{teleop_params}}'
 
+run-teleop-sim-rviz:
+    bash -c '{{src_driver}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_sim_rviz.launch.py'
+
 # --- Services ----------------------------------------------------------------
 
 svc-park:
