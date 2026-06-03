@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from conftest import call_solve_target_ik
 
 from rebotarm_cartesian_teleop.fake_joint_state import (
     FAKE_JOINT_NAMES,
@@ -12,7 +13,7 @@ from rebotarm_cartesian_teleop.fake_joint_state import (
     update_last_valid_fake_q,
 )
 from rebotarm_cartesian_teleop.fk_kinematics import compute_fk_pose, init_fk_context
-from rebotarm_cartesian_teleop.jog_core_logic import IkConfig, solve_target_ik
+from rebotarm_cartesian_teleop.jog_core_logic import IkConfig
 from rebotarm_cartesian_teleop.sdk_path import ensure_rebot_sdk_in_syspath
 
 
@@ -110,15 +111,14 @@ def test_q_current_unchanged_after_fake_update_with_ik():
         max_ik_error=0.005,
         max_joint_delta_rad=0.25,
     )
-    q_target, ik_success, _, _, _ = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    q_target, ik_success, _, _ = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         target_x=pose.position.x,
         target_y=pose.position.y,
         target_z=pose.position.z,
-        current_pose=pose,
         ik_config=ik_config,
-        last_q_target=None,
     )
     q_current_list = [float(v) for v in fk_ctx.q_current]
     fake_joint_positions_to_publish(
@@ -141,15 +141,14 @@ def test_q_target_empty_on_ik_failure_while_fake_freezes():
         max_ik_error=0.005,
         max_joint_delta_rad=0.25,
     )
-    q_target_ok, ok1, _, last_q, _ = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    q_target_ok, ok1, _, _ = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         target_x=pose.position.x,
         target_y=pose.position.y,
         target_z=pose.position.z,
-        current_pose=pose,
         ik_config=ik_config,
-        last_q_target=None,
     )
     assert ok1 is True
     assert len(q_target_ok) == 6
@@ -169,15 +168,14 @@ def test_q_target_empty_on_ik_failure_while_fake_freezes():
         max_ik_error=ik_config.max_ik_error,
         max_joint_delta_rad=1e-6,
     )
-    q_target_fail, ok2, reason, _, _ = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    q_target_fail, ok2, reason, _ = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        q_target_ok,
         target_x=0.45,
         target_y=0.25,
         target_z=0.40,
-        current_pose=pose,
         ik_config=strict,
-        last_q_target=last_q,
     )
     assert ok2 is False
     assert q_target_fail == []

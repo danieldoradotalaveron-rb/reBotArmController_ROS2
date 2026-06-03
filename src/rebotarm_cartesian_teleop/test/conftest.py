@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import numpy as np
 from rebotarm_msgs.msg import CartesianJogCmd
 from sensor_msgs.msg import Joy
 
-from rebotarm_cartesian_teleop.jog_core_logic import WorkspaceLimits
+from rebotarm_cartesian_teleop.fk_pose import pose_to_rotation_matrix
+from rebotarm_cartesian_teleop.jog_core_logic import IkConfig, WorkspaceLimits, solve_target_ik
 from rebotarm_cartesian_teleop.joy_mapping import JoyMapperConfig
 
 
@@ -79,3 +81,28 @@ def make_cmd(
     msg.linear.y = linear_y
     msg.linear.z = linear_z
     return msg
+
+
+def call_solve_target_ik(
+    fk_ctx,
+    pose,
+    q_seed,
+    *,
+    state_name: str = "ACTIVE",
+    target_x: float,
+    target_y: float,
+    target_z: float,
+    ik_config: IkConfig,
+    **kwargs,
+):
+    return solve_target_ik(
+        fk_ctx=fk_ctx,
+        state_name=state_name,
+        target_x=target_x,
+        target_y=target_y,
+        target_z=target_z,
+        target_rotation=pose_to_rotation_matrix(pose),
+        q_seed=np.asarray(q_seed, dtype=np.float64),
+        ik_config=ik_config,
+        **kwargs,
+    )

@@ -113,13 +113,26 @@ def initial_target_pose_from_fk(
 
 
 def compute_fk_pose(ctx: FkContext) -> tuple[Pose | None, str]:
-    if not ctx.ok or ctx.model is None or ctx.q_current is None:
+    if ctx.q_current is None:
         return None, ctx.error or "FK_NOT_READY"
+    pose, _, err = compute_fk_pose_for_q(ctx, ctx.q_current)
+    return pose, err
+
+
+def compute_fk_pose_for_q(
+    ctx: FkContext,
+    q: np.ndarray,
+) -> tuple[Pose | None, np.ndarray | None, str]:
+    """Compute FK at q without mutating ctx.q_current."""
+    if not ctx.ok or ctx.model is None:
+        return None, None, ctx.error or "FK_NOT_READY"
 
     try:
         from reBotArm_control_py.kinematics import compute_fk
 
-        position, rotation, _ = compute_fk(ctx.model, ctx.q_current, frame_name=ctx.ee_frame)
-        return fk_arrays_to_pose(position, rotation), ""
+        q_arr = np.asarray(q, dtype=np.float64).reshape(ctx.model.nq)
+        position, rotation, _ = compute_fk(ctx.model, q_arr, frame_name=ctx.ee_frame)
+        rot = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+        return fk_arrays_to_pose(position, rot), rot, ""
     except Exception:
-        return None, "FK_COMPUTE_FAILED"
+        return None, None, "FK_COMPUTE_FAILED"

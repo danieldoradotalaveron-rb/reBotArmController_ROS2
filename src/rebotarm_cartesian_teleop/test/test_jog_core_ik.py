@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from conftest import make_cmd
+from conftest import call_solve_target_ik, default_workspace, make_cmd
 
 from rebotarm_cartesian_teleop.fk_kinematics import compute_fk_pose, init_fk_context
 from rebotarm_cartesian_teleop.jog_core_logic import (
@@ -12,7 +12,6 @@ from rebotarm_cartesian_teleop.jog_core_logic import (
     build_cartesian_jog_state,
     integrate_target_pose,
     resolve_rejection_reason,
-    solve_target_ik,
 )
 from rebotarm_cartesian_teleop.sdk_path import ensure_rebot_sdk_in_syspath
 
@@ -48,39 +47,36 @@ def test_solve_target_ik_at_fk_position_succeeds(fk_ctx, ik_config):
     assert err == ""
     assert pose is not None
 
-    q_target, ik_success, ik_reason, last, _ = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    q_target, ik_success, ik_reason, _ = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         target_x=pose.position.x,
         target_y=pose.position.y,
         target_z=pose.position.z,
-        current_pose=pose,
         ik_config=ik_config,
-        last_q_target=None,
     )
     assert ik_success is True
     assert ik_reason == ""
     assert len(q_target) == 6
-    assert last is not None
-    assert len(last) == 6
 
 
 def test_solve_target_ik_not_run_when_deadman_up(fk_ctx, ik_config):
     pose, _ = compute_fk_pose(fk_ctx)
-    q_target, ik_success, ik_reason, last, _ = solve_target_ik(
-        fk_ctx=fk_ctx,
+    q_target, ik_success, ik_reason, diag = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
         state_name="DEADMAN_UP",
         target_x=0.3,
         target_y=0.0,
         target_z=0.2,
-        current_pose=pose,
         ik_config=ik_config,
-        last_q_target=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
     )
     assert ik_success is False
     assert q_target == []
     assert ik_reason == ""
-    assert last == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    assert diag is None
 
 
 def test_joint_delta_rejects_large_step(fk_ctx, ik_config):
@@ -91,15 +87,14 @@ def test_joint_delta_rejects_large_step(fk_ctx, ik_config):
         max_ik_error=ik_config.max_ik_error,
         max_joint_delta_rad=1e-6,
     )
-    q_target, ik_success, ik_reason, _, _ = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    q_target, ik_success, ik_reason, _ = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         target_x=0.45,
         target_y=0.25,
         target_z=0.40,
-        current_pose=pose,
         ik_config=strict,
-        last_q_target=None,
     )
     assert ik_success is False
     assert q_target == []
@@ -124,15 +119,14 @@ def test_rejection_active_uses_ik_reason():
 
 def test_build_state_active_ik_success_fields(fk_ctx, ik_config):
     pose, _ = compute_fk_pose(fk_ctx)
-    q_target, ik_success, ik_reason, _, _ = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    q_target, ik_success, ik_reason, _ = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         target_x=pose.position.x,
         target_y=pose.position.y,
         target_z=pose.position.z,
-        current_pose=pose,
         ik_config=ik_config,
-        last_q_target=None,
     )
     msg = build_cartesian_jog_state(
         state_name="ACTIVE",
@@ -156,8 +150,6 @@ def test_build_state_active_ik_success_fields(fk_ctx, ik_config):
 
 
 def test_q_current_unchanged_after_integration(fk_ctx):
-    from conftest import default_workspace
-
     q_before = fk_ctx.q_current.copy()
     integrate_target_pose(
         0.30, 0.0, 0.20, make_cmd(linear_x=1.0), 0.1, "ACTIVE", default_workspace()

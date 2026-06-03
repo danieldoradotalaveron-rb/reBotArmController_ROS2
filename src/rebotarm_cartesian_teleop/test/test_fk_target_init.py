@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import pytest
+from conftest import call_solve_target_ik
 
 from rebotarm_cartesian_teleop.fk_kinematics import (
     compute_fk_pose,
     init_fk_context,
     initial_target_pose_from_fk,
 )
-from rebotarm_cartesian_teleop.jog_core_logic import (
-    IkConfig,
-    commit_target_on_ik_success,
-    solve_target_ik,
-)
+from rebotarm_cartesian_teleop.jog_core_logic import IkConfig, commit_target_on_ik_success
 from rebotarm_cartesian_teleop.sdk_path import ensure_rebot_sdk_in_syspath
 
 
@@ -65,15 +62,14 @@ def test_aligned_initial_target_ik_succeeds_neutral():
         max_ik_error=0.005,
         max_joint_delta_rad=0.25,
     )
-    q_target, ik_success, ik_reason, _, _ = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    q_target, ik_success, ik_reason, _ = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         target_x=init.x,
         target_y=init.y,
         target_z=init.z,
-        current_pose=pose,
         ik_config=ik_config,
-        last_q_target=None,
     )
     assert ik_success is True
     assert ik_reason == ""

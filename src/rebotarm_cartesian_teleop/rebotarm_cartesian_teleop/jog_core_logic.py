@@ -9,8 +9,8 @@ import numpy as np
 from geometry_msgs.msg import Pose
 from rebotarm_msgs.msg import CartesianJogCmd, CartesianJogState
 
-from .fk_kinematics import FkContext
-from .fk_pose import pose_to_rotation_matrix
+from .fk_kinematics import FkContext, compute_fk_pose_for_q
+from .fk_pose import fk_arrays_to_pose
 from .ik_kinematics import compute_ik_for_pose, joint_delta_within_limit
 
 
@@ -47,7 +47,7 @@ def format_ik_failure_log(diag: IkFailureDiagnostics) -> str:
     ik_error_str = f"{diag.ik_error:.6f}" if diag.ik_error is not None else "n/a"
     ik_iter_str = str(diag.ik_iterations) if diag.ik_iterations is not None else "n/a"
     clamp_str = diag.clamp_reason if diag.clamp_reason else "(none)"
-    rot_src = "FK current_pose" if diag.target_rotation_from_fk else "other"
+    rot_src = "FK(q_sim)" if diag.target_rotation_from_fk else "other"
     return (
         f"IK failure: reason={diag.rejection_reason} state={diag.state} "
         f"committed={committed_str} candidate=({tx:.4f}, {ty:.4f}, {tz:.4f}) "
@@ -115,21 +115,21 @@ def clamp(value: float, min_value: float, max_value: float) -> tuple[float, bool
 
 
 def compute_candidate_target(
-    committed_x: float,
-    committed_y: float,
-    committed_z: float,
+    sim_x: float,
+    sim_y: float,
+    sim_z: float,
     latest_cmd: CartesianJogCmd,
     dt: float,
     workspace: WorkspaceLimits,
 ) -> tuple[float, float, float, str]:
-    """Integrate joystick delta from committed target into a candidate target."""
+    """Integrate joystick delta from FK(q_sim) position into a candidate target."""
     vx = float(latest_cmd.linear.x)
     vy = float(latest_cmd.linear.y)
     vz = float(latest_cmd.linear.z)
 
-    candidate_x = committed_x + vx * dt
-    candidate_y = committed_y + vy * dt
-    candidate_z = committed_z + vz * dt
+    candidate_x = sim_x + vx * dt
+    candidate_y = sim_y + vy * dt
+    candidate_z = sim_z + vz * dt
 
     clamp_reasons: list[str] = []
 
@@ -156,10 +156,74 @@ def commit_target_on_ik_success(
     candidate_z: float,
     ik_success: bool,
 ) -> tuple[float, float, float]:
-    """Commit candidate target only when IK accepted the motion."""
+    """Legacy helper: commit candidate on success (superseded by resync_committed_from_q_sim)."""
     if ik_success:
         return candidate_x, candidate_y, candidate_z
     return committed_x, committed_y, committed_z
+
+
+def update_q_sim_on_ik_success(
+    q_sim: np.ndarray,
+    candidate_q: list[float],
+    ik_success: bool,
+) -> np.ndarray:
+    if ik_success and candidate_q:
+        return np.asarray(candidate_q, dtype=np.float64).reshape(q_sim.shape)
+    return np.asarray(q_sim, dtype=np.float64)
+
+
+def compute_candidate_drift_m(
+    fk_ctx: FkContext,
+    candidate_x: float,
+    candidate_y: float,
+    candidate_z: float,
+    candidate_q: list[float],
+) -> float:
+    """Position drift between ideal candidate and FK(candidate_q) (diagnostics only)."""
+    if not candidate_q:
+        return 0.0
+    pose, _, err = compute_fk_pose_for_q(fk_ctx, np.asarray(candidate_q, dtype=np.float64))
+    if err or pose is None:
+        return 0.0
+    dx = candidate_x - float(pose.position.x)
+    dy = candidate_y - float(pose.position.y)
+    dz = candidate_z - float(pose.position.z)
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def resync_committed_from_q_sim(
+    fk_ctx: FkContext,
+    q_sim: np.ndarray,
+) -> tuple[float, float, float, np.ndarray | None, Pose | None, str]:
+    """Set committed pose from FK(q_sim). Always used after accepted IK."""
+    pose, rotation, err = compute_fk_pose_for_q(fk_ctx, q_sim)
+    if err or pose is None or rotation is None:
+        return 0.0, 0.0, 0.0, None, None, err or "FK_NOT_READY"
+    return (
+        float(pose.position.x),
+        float(pose.position.y),
+        float(pose.position.z),
+        rotation,
+        pose,
+        "",
+    )
+
+
+def build_committed_target_pose(
+    x: float,
+    y: float,
+    z: float,
+    rotation: np.ndarray | None,
+) -> Pose:
+    if rotation is not None:
+        pos = np.array([x, y, z], dtype=np.float64)
+        return fk_arrays_to_pose(pos, rotation)
+    pose = Pose()
+    pose.position.x = float(x)
+    pose.position.y = float(y)
+    pose.position.z = float(z)
+    pose.orientation.w = 1.0
+    return pose
 
 
 def integrate_target_pose(
@@ -218,33 +282,28 @@ def solve_target_ik(
     target_x: float,
     target_y: float,
     target_z: float,
-    current_pose: Pose | None,
+    target_rotation: np.ndarray,
+    q_seed: np.ndarray,
     ik_config: IkConfig,
-    last_q_target: list[float] | None,
     clamp_reason: str = "",
     committed_x: float | None = None,
     committed_y: float | None = None,
     committed_z: float | None = None,
-) -> tuple[list[float], bool, str, list[float] | None, IkFailureDiagnostics | None]:
-    """Compute q_target from candidate target position and FK orientation."""
-    if state_name != "ACTIVE" or not fk_ctx.ok or current_pose is None:
-        return [], False, "", last_q_target, None
+) -> tuple[list[float], bool, str, IkFailureDiagnostics | None]:
+    """Compute q_target from candidate position and FK(q_sim) orientation."""
+    if state_name != "ACTIVE" or not fk_ctx.ok:
+        return [], False, "", None
 
     if (
         fk_ctx.model is None
         or fk_ctx.data is None
         or fk_ctx.end_frame_id is None
-        or fk_ctx.q_current is None
     ):
-        return [], False, "", last_q_target, None
+        return [], False, "", None
 
     target_pos = np.array([target_x, target_y, target_z], dtype=np.float64)
-    target_rot = pose_to_rotation_matrix(current_pose)
-
-    if last_q_target is not None and len(last_q_target) == fk_ctx.model.nq:
-        q_seed = np.asarray(last_q_target, dtype=np.float64)
-    else:
-        q_seed = fk_ctx.q_current.copy()
+    target_rot = np.asarray(target_rotation, dtype=np.float64).reshape(3, 3)
+    q_seed_arr = np.asarray(q_seed, dtype=np.float64).reshape(fk_ctx.model.nq)
 
     ik_result = compute_ik_for_pose(
         fk_ctx.model,
@@ -252,7 +311,7 @@ def solve_target_ik(
         fk_ctx.end_frame_id,
         target_pos,
         target_rot,
-        q_seed,
+        q_seed_arr,
         ik_config.max_iterations,
         ik_config.tolerance,
         ik_config.max_ik_error,
@@ -264,7 +323,7 @@ def solve_target_ik(
             candidate_x=target_x,
             candidate_y=target_y,
             candidate_z=target_z,
-            q_seed=q_seed,
+            q_seed=q_seed_arr,
             ik_config=ik_config,
             state_name=state_name,
             clamp_reason=clamp_reason,
@@ -274,7 +333,7 @@ def solve_target_ik(
             ik_error=ik_result.error,
             ik_iterations=ik_result.iterations,
         )
-        return [], False, ik_result.reason, last_q_target, diag
+        return [], False, ik_result.reason, diag
 
     if len(ik_result.q_target) != fk_ctx.model.nq:
         diag = _ik_failure_diagnostics(
@@ -282,7 +341,7 @@ def solve_target_ik(
             candidate_x=target_x,
             candidate_y=target_y,
             candidate_z=target_z,
-            q_seed=q_seed,
+            q_seed=q_seed_arr,
             ik_config=ik_config,
             state_name=state_name,
             clamp_reason=clamp_reason,
@@ -292,11 +351,11 @@ def solve_target_ik(
             ik_error=ik_result.error,
             ik_iterations=ik_result.iterations,
         )
-        return [], False, "INVALID_IK_RESULT", last_q_target, diag
+        return [], False, "INVALID_IK_RESULT", diag
 
     if not joint_delta_within_limit(
         ik_result.q_target,
-        q_seed,
+        q_seed_arr,
         ik_config.max_joint_delta_rad,
     ):
         diag = _ik_failure_diagnostics(
@@ -304,7 +363,7 @@ def solve_target_ik(
             candidate_x=target_x,
             candidate_y=target_y,
             candidate_z=target_z,
-            q_seed=q_seed,
+            q_seed=q_seed_arr,
             ik_config=ik_config,
             state_name=state_name,
             clamp_reason=clamp_reason,
@@ -314,10 +373,9 @@ def solve_target_ik(
             ik_error=ik_result.error,
             ik_iterations=ik_result.iterations,
         )
-        return [], False, "JOINT_DELTA_TOO_LARGE", last_q_target, diag
+        return [], False, "JOINT_DELTA_TOO_LARGE", diag
 
-    new_last = list(ik_result.q_target)
-    return new_last, True, "", new_last, None
+    return list(ik_result.q_target), True, "", None
 
 
 def build_cartesian_jog_state(
@@ -332,6 +390,7 @@ def build_cartesian_jog_state(
     output_mode: str,
     command_age: float,
     current_pose: Pose | None = None,
+    target_pose: Pose | None = None,
     q_current: list[float] | None = None,
     q_target: list[float] | None = None,
     ik_success: bool = False,
@@ -350,10 +409,13 @@ def build_cartesian_jog_state(
         msg.current_pose.position.z = target_z
         msg.current_pose.orientation.w = 1.0
 
-    msg.target_pose.position.x = target_x
-    msg.target_pose.position.y = target_y
-    msg.target_pose.position.z = target_z
-    msg.target_pose.orientation.w = 1.0
+    if target_pose is not None:
+        msg.target_pose = target_pose
+    else:
+        msg.target_pose.position.x = target_x
+        msg.target_pose.position.y = target_y
+        msg.target_pose.position.z = target_z
+        msg.target_pose.orientation.w = 1.0
 
     if latest_cmd is not None:
         msg.commanded_twist.linear = latest_cmd.linear

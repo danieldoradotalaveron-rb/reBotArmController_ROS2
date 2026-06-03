@@ -6,10 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from conftest import call_solve_target_ik
 
 from rebotarm_cartesian_teleop.fk_kinematics import init_fk_context
 from rebotarm_cartesian_teleop.ik_kinematics import IkSolveResult, compute_ik_for_pose
-from rebotarm_cartesian_teleop.jog_core_logic import IkConfig, solve_target_ik
+from rebotarm_cartesian_teleop.jog_core_logic import IkConfig
 
 
 def _mock_ik_result(*, success: bool, error: float, q: np.ndarray, iterations: int = 100):
@@ -116,15 +117,14 @@ def test_solve_target_ik_joint_delta_rejects_acceptable_error():
         from rebotarm_cartesian_teleop.fk_kinematics import compute_fk_pose
 
         pose, _ = compute_fk_pose(fk_ctx)
-        q_target, ik_success, ik_reason, _, diag = solve_target_ik(
-            fk_ctx=fk_ctx,
-            state_name="ACTIVE",
+        q_target, ik_success, ik_reason, diag = call_solve_target_ik(
+            fk_ctx,
+            pose,
+            fk_ctx.q_current,
             target_x=0.30,
             target_y=0.0,
             target_z=0.20,
-            current_pose=pose,
             ik_config=ik_config,
-            last_q_target=None,
         )
 
     assert ik_success is False

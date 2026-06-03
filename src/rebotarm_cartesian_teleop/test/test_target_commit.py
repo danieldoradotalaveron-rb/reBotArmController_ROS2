@@ -5,11 +5,16 @@ from __future__ import annotations
 import math
 from unittest.mock import patch
 
+import numpy as np
 import pytest
-from conftest import default_workspace, make_cmd
+from conftest import call_solve_target_ik, default_workspace, make_cmd
 
 from rebotarm_cartesian_teleop.fake_joint_state import fake_joint_positions_to_publish
-from rebotarm_cartesian_teleop.fk_kinematics import compute_fk_pose, init_fk_context
+from rebotarm_cartesian_teleop.fk_kinematics import (
+    compute_fk_pose,
+    compute_fk_pose_for_q,
+    init_fk_context,
+)
 from rebotarm_cartesian_teleop.ik_kinematics import IkSolveResult
 from rebotarm_cartesian_teleop.jog_core_logic import (
     IkConfig,
@@ -18,7 +23,9 @@ from rebotarm_cartesian_teleop.jog_core_logic import (
     compute_candidate_target,
     compute_state_name,
     integrate_target_pose,
+    resync_committed_from_q_sim,
     solve_target_ik,
+    update_q_sim_on_ik_success,
 )
 from rebotarm_cartesian_teleop.sdk_path import ensure_rebot_sdk_in_syspath
 
@@ -128,9 +135,10 @@ def test_non_active_states_do_not_integrate_committed_target(state_name, cmd, co
 
 @pytest.mark.skipif(not _sdk_available(), reason="reBotArm_control_py not found")
 def test_active_valid_ik_commits_with_real_solver():
-    fk_ctx = init_fk_context("", "end_link", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    pose, _ = compute_fk_pose(fk_ctx)
-    committed = (pose.position.x, pose.position.y, pose.position.z)
+    fk_ctx = init_fk_context("", "end_link", [0.0, -0.3, -0.3, 0.0, 0.0, 0.0])
+    q_sim = np.asarray(fk_ctx.q_current, dtype=np.float64).copy()
+    pose, sim_rot, _ = compute_fk_pose_for_q(fk_ctx, q_sim)
+    committed = (float(pose.position.x), float(pose.position.y), float(pose.position.z))
     ik_config = IkConfig(
         max_iterations=100,
         tolerance=1e-4,
@@ -139,32 +147,32 @@ def test_active_valid_ik_commits_with_real_solver():
     )
     cmd = make_cmd(linear_x=0.01)
     candidate_x, candidate_y, candidate_z, _ = compute_candidate_target(*committed, cmd, 0.1, WS)
-    q_target, ik_success, _, _, _ = solve_target_ik(
+    q_target, ik_success, _, _ = solve_target_ik(
         fk_ctx=fk_ctx,
         state_name="ACTIVE",
         target_x=candidate_x,
         target_y=candidate_y,
         target_z=candidate_z,
-        current_pose=pose,
+        target_rotation=sim_rot,
+        q_seed=q_sim,
         ik_config=ik_config,
-        last_q_target=None,
         committed_x=committed[0],
         committed_y=committed[1],
         committed_z=committed[2],
     )
-    new_committed = commit_target_on_ik_success(
-        *committed, candidate_x, candidate_y, candidate_z, ik_success
-    )
     assert ik_success is True
     assert len(q_target) == 6
-    assert new_committed[0] > committed[0]
+    q_sim = update_q_sim_on_ik_success(q_sim, q_target, True)
+    new_committed = resync_committed_from_q_sim(fk_ctx, q_sim)[:3]
+    assert new_committed[0] >= committed[0]
 
 
 @pytest.mark.skipif(not _sdk_available(), reason="reBotArm_control_py not found")
 def test_active_joint_delta_rejection_keeps_committed():
-    fk_ctx = init_fk_context("", "end_link", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    pose, _ = compute_fk_pose(fk_ctx)
-    committed = (pose.position.x, pose.position.y, pose.position.z)
+    fk_ctx = init_fk_context("", "end_link", [0.0, -0.3, -0.3, 0.0, 0.0, 0.0])
+    q_sim = np.asarray(fk_ctx.q_current, dtype=np.float64).copy()
+    pose, sim_rot, _ = compute_fk_pose_for_q(fk_ctx, q_sim)
+    committed = (float(pose.position.x), float(pose.position.y), float(pose.position.z))
     ik_config = IkConfig(
         max_iterations=100,
         tolerance=1e-4,
@@ -174,26 +182,24 @@ def test_active_joint_delta_rejection_keeps_committed():
     candidate_x, candidate_y, candidate_z, _ = compute_candidate_target(
         *committed, make_cmd(linear_x=0.5), 0.1, WS
     )
-    q_target, ik_success, ik_reason, _, _ = solve_target_ik(
+    q_target, ik_success, ik_reason, _ = solve_target_ik(
         fk_ctx=fk_ctx,
         state_name="ACTIVE",
         target_x=candidate_x,
         target_y=candidate_y,
         target_z=candidate_z,
-        current_pose=pose,
+        target_rotation=sim_rot,
+        q_seed=q_sim,
         ik_config=ik_config,
-        last_q_target=None,
         committed_x=committed[0],
         committed_y=committed[1],
         committed_z=committed[2],
     )
-    new_committed = commit_target_on_ik_success(
-        *committed, candidate_x, candidate_y, candidate_z, ik_success
-    )
     assert ik_success is False
     assert q_target == []
     assert ik_reason == "JOINT_DELTA_TOO_LARGE"
-    assert new_committed == pytest.approx(committed)
+    unchanged = resync_committed_from_q_sim(fk_ctx, q_sim)[:3]
+    assert unchanged == pytest.approx(committed)
 
 
 def test_active_ik_error_too_high_keeps_committed_with_mock():
@@ -223,15 +229,14 @@ def test_active_ik_error_too_high_keeps_committed_with_mock():
             "rebotarm_cartesian_teleop.jog_core_logic.compute_ik_for_pose",
             return_value=mock_ik,
         ):
-            q_target, ik_success, ik_reason, _, _ = solve_target_ik(
-                fk_ctx=fk_ctx,
-                state_name="ACTIVE",
+            q_target, ik_success, ik_reason, _ = call_solve_target_ik(
+                fk_ctx,
+                pose,
+                fk_ctx.q_current,
                 target_x=candidate_x,
                 target_y=candidate_y,
                 target_z=candidate_z,
-                current_pose=pose,
                 ik_config=IkConfig(100, 0.001, 0.005, 0.25),
-                last_q_target=None,
                 committed_x=committed[0],
                 committed_y=committed[1],
                 committed_z=committed[2],

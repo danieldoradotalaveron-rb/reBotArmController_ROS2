@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from conftest import call_solve_target_ik
 
 from rebotarm_cartesian_teleop.fk_kinematics import compute_fk_pose, init_fk_context
 from rebotarm_cartesian_teleop.jog_core_logic import (
     IkConfig,
     IkFailureDiagnostics,
     format_ik_failure_log,
-    solve_target_ik,
 )
 from rebotarm_cartesian_teleop.sdk_path import ensure_rebot_sdk_in_syspath
 
@@ -65,7 +65,7 @@ def test_format_ik_failure_log_contains_required_fields():
     assert "max_ik_error=0.005000" in line
     assert "max_joint_delta_rad=0.2500" in line
     assert "clamp_reason=WORKSPACE_X" in line
-    assert "target_rotation=FK current_pose" in line
+    assert "target_rotation=FK(q_sim)" in line
 
 
 def test_format_ik_failure_log_handles_missing_solver_metrics():
@@ -95,15 +95,14 @@ def test_solve_target_ik_returns_diagnostics_on_joint_delta_rejection(fk_ctx, ik
         max_ik_error=ik_config.max_ik_error,
         max_joint_delta_rad=1e-6,
     )
-    q_target, ik_success, ik_reason, _, diag = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    q_target, ik_success, ik_reason, diag = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         target_x=0.45,
         target_y=0.25,
         target_z=0.40,
-        current_pose=pose,
         ik_config=strict,
-        last_q_target=None,
         clamp_reason="WORKSPACE_Z",
         committed_x=0.26,
         committed_y=0.0,
@@ -122,15 +121,15 @@ def test_solve_target_ik_returns_diagnostics_on_joint_delta_rejection(fk_ctx, ik
 
 def test_solve_target_ik_no_diagnostics_when_not_active(fk_ctx, ik_config):
     pose, _ = compute_fk_pose(fk_ctx)
-    _, ik_success, _, _, diag = solve_target_ik(
-        fk_ctx=fk_ctx,
+    _, ik_success, _, diag = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         state_name="DEADMAN_UP",
         target_x=0.3,
         target_y=0.0,
         target_z=0.2,
-        current_pose=pose,
         ik_config=ik_config,
-        last_q_target=None,
     )
     assert ik_success is False
     assert diag is None
@@ -138,15 +137,14 @@ def test_solve_target_ik_no_diagnostics_when_not_active(fk_ctx, ik_config):
 
 def test_solve_target_ik_success_has_no_diagnostics(fk_ctx, ik_config):
     pose, _ = compute_fk_pose(fk_ctx)
-    _, ik_success, ik_reason, _, diag = solve_target_ik(
-        fk_ctx=fk_ctx,
-        state_name="ACTIVE",
+    _, ik_success, ik_reason, diag = call_solve_target_ik(
+        fk_ctx,
+        pose,
+        fk_ctx.q_current,
         target_x=pose.position.x,
         target_y=pose.position.y,
         target_z=pose.position.z,
-        current_pose=pose,
         ik_config=ik_config,
-        last_q_target=None,
     )
     assert ik_success is True
     assert ik_reason == ""

@@ -1,21 +1,29 @@
 import math
 
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rebotarm_msgs.msg import CartesianJogCmd, CartesianJogState
 from sensor_msgs.msg import JointState
 
-from .fake_joint_state import build_fake_joint_state, fake_joint_positions_to_publish
-from .fk_kinematics import FkContext, compute_fk_pose, init_fk_context, initial_target_pose_from_fk
+from .fake_joint_state import build_fake_joint_state
+from .fk_kinematics import (
+    FkContext,
+    compute_fk_pose_for_q,
+    init_fk_context,
+)
 from .jog_core_logic import (
     IkConfig,
     WorkspaceLimits,
     build_cartesian_jog_state,
-    commit_target_on_ik_success,
+    build_committed_target_pose,
+    compute_candidate_drift_m,
     compute_candidate_target,
     compute_state_name,
     format_ik_failure_log,
+    resync_committed_from_q_sim,
     solve_target_ik,
+    update_q_sim_on_ik_success,
 )
 
 
@@ -50,6 +58,7 @@ class CartesianJogCore(Node):
         self.declare_parameter("max_ik_error", 0.005)
         self.declare_parameter("max_joint_delta_rad", 0.25)
         self.declare_parameter("ik_failure_log_interval_s", 1.0)
+        self.declare_parameter("candidate_drift_log_threshold_m", 0.001)
         self.declare_parameter("publish_fake_joint_states", True)
         self.declare_parameter("fake_joint_states_topic", "/rebotarm/fake_joint_states")
         self.declare_parameter("fake_joint_state_hz", 50.0)
@@ -71,10 +80,6 @@ class CartesianJogCore(Node):
             z_max=float(self.get_parameter("workspace_z_max").value),
         )
 
-        fallback_x = float(self.get_parameter("initial_x").value)
-        fallback_y = float(self.get_parameter("initial_y").value)
-        fallback_z = float(self.get_parameter("initial_z").value)
-
         urdf_path = str(self.get_parameter("urdf_path").value)
         ee_frame = str(self.get_parameter("ee_frame").value)
         initial_q = [float(v) for v in self.get_parameter("initial_q").value]
@@ -90,20 +95,32 @@ class CartesianJogCore(Node):
         else:
             self.get_logger().error(f"FK init failed: {self._fk.error}")
 
-        target_init = initial_target_pose_from_fk(self._fk, fallback_x, fallback_y, fallback_z)
-        self.committed_target_x = target_init.x
-        self.committed_target_y = target_init.y
-        self.committed_target_z = target_init.z
-        if target_init.from_fk:
-            self.get_logger().info(
-                "Initial committed target from FK(q_current): "
-                f"x={self.committed_target_x:.3f}, y={self.committed_target_y:.3f}, "
-                f"z={self.committed_target_z:.3f}"
+        if self._fk.ok and self._fk.q_current is not None:
+            self._q_sim = np.asarray(self._fk.q_current, dtype=np.float64).copy()
+        else:
+            self._q_sim = np.zeros(len(initial_q), dtype=np.float64)
+
+        (
+            self.committed_target_x,
+            self.committed_target_y,
+            self.committed_target_z,
+            self._committed_rotation,
+            _,
+            fk_init_err,
+        ) = resync_committed_from_q_sim(self._fk, self._q_sim)
+        if fk_init_err:
+            fallback_x = float(self.get_parameter("initial_x").value)
+            fallback_y = float(self.get_parameter("initial_y").value)
+            fallback_z = float(self.get_parameter("initial_z").value)
+            self.committed_target_x = fallback_x
+            self.committed_target_y = fallback_y
+            self.committed_target_z = fallback_z
+            self.get_logger().warn(
+                f"FK(q_sim) init failed ({fk_init_err}); using YAML fallback target"
             )
         else:
-            self.get_logger().warn(
-                "Initial committed target using YAML fallback "
-                f"({target_init.fallback_reason}): "
+            self.get_logger().info(
+                "Initial committed target from FK(q_sim): "
                 f"x={self.committed_target_x:.3f}, y={self.committed_target_y:.3f}, "
                 f"z={self.committed_target_z:.3f}"
             )
@@ -113,9 +130,11 @@ class CartesianJogCore(Node):
         self.last_tick_time_ns = self.get_clock().now().nanoseconds
         self.last_clamp_reason = ""
         self._fk_tick_error = ""
-        self._last_q_target: list[float] | None = None
         self._ik_failure_log_interval_s = float(
             self.get_parameter("ik_failure_log_interval_s").value
+        )
+        self._candidate_drift_log_threshold_m = float(
+            self.get_parameter("candidate_drift_log_threshold_m").value
         )
         self._last_ik_failure_log_ns = 0
 
@@ -124,9 +143,7 @@ class CartesianJogCore(Node):
         )
         fake_joint_states_topic = str(self.get_parameter("fake_joint_states_topic").value)
         self._fake_joint_state_hz = float(self.get_parameter("fake_joint_state_hz").value)
-        self._last_valid_fake_q: list[float] | None = None
-        if self._publish_fake_joint_states and self._fk.q_current is not None:
-            self._last_valid_fake_q = [float(v) for v in self._fk.q_current]
+        self._last_valid_fake_q: list[float] = [float(v) for v in self._q_sim]
 
         self._ik_config = IkConfig(
             max_iterations=int(self.get_parameter("ik_max_iterations").value),
@@ -168,11 +185,6 @@ class CartesianJogCore(Node):
         self.get_logger().info(f"Publishing to: {state_topic}")
         self.get_logger().info(f"Output mode: {self.output_mode}")
         self.get_logger().info(f"Dry run: {self.dry_run}")
-        self.get_logger().info(
-            "Initial committed target: "
-            f"x={self.committed_target_x:.3f}, y={self.committed_target_y:.3f}, "
-            f"z={self.committed_target_z:.3f}"
-        )
         if self._publish_fake_joint_states:
             self.get_logger().info(
                 f"Publishing fake joint states to: {fake_joint_states_topic} "
@@ -195,21 +207,17 @@ class CartesianJogCore(Node):
             return self._fk.error
         return self._fk_tick_error
 
-    def _current_pose_and_q(self):
+    def _pose_from_q_sim(self):
         fk_error = self._fk_error_reason()
         if fk_error:
             return None, None, fk_error
 
-        pose, tick_error = compute_fk_pose(self._fk)
+        pose, rotation, tick_error = compute_fk_pose_for_q(self._fk, self._q_sim)
         if tick_error:
             self._fk_tick_error = tick_error
             return None, None, tick_error
         self._fk_tick_error = ""
-
-        q_list = None
-        if self._fk.q_current is not None:
-            q_list = [float(v) for v in self._fk.q_current]
-        return pose, q_list, ""
+        return pose, rotation, ""
 
     def _maybe_log_ik_failure(self, diag, now_ns: int) -> None:
         if diag is None:
@@ -221,7 +229,7 @@ class CartesianJogCore(Node):
         self.get_logger().warn(format_ik_failure_log(diag))
 
     def _publish_fake_joint_state(self) -> None:
-        if self._fake_joint_states_publisher is None or self._last_valid_fake_q is None:
+        if self._fake_joint_states_publisher is None:
             return
         msg = build_fake_joint_state(self._last_valid_fake_q)
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -241,59 +249,94 @@ class CartesianJogCore(Node):
 
         self.last_clamp_reason = ""
 
-        candidate_x = self.committed_target_x
-        candidate_y = self.committed_target_y
-        candidate_z = self.committed_target_z
+        current_pose, sim_rotation, fk_error = self._pose_from_q_sim()
+        q_current_list = [float(v) for v in self._q_sim]
+
+        sim_x = self.committed_target_x
+        sim_y = self.committed_target_y
+        sim_z = self.committed_target_z
+        if current_pose is not None:
+            sim_x = float(current_pose.position.x)
+            sim_y = float(current_pose.position.y)
+            sim_z = float(current_pose.position.z)
+
+        candidate_x = sim_x
+        candidate_y = sim_y
+        candidate_z = sim_z
         if state_name == "ACTIVE" and self.latest_cmd is not None:
             candidate_x, candidate_y, candidate_z, self.last_clamp_reason = (
                 compute_candidate_target(
-                    self.committed_target_x,
-                    self.committed_target_y,
-                    self.committed_target_z,
+                    sim_x,
+                    sim_y,
+                    sim_z,
                     self.latest_cmd,
                     dt,
                     self._workspace,
                 )
             )
 
-        current_pose, q_current, fk_error = self._current_pose_and_q()
+        q_target: list[float] = []
+        ik_success = False
+        ik_reason = ""
+        ik_failure_diag = None
 
-        q_target, ik_success, ik_reason, self._last_q_target, ik_failure_diag = solve_target_ik(
-            fk_ctx=self._fk,
-            state_name=state_name,
-            target_x=candidate_x,
-            target_y=candidate_y,
-            target_z=candidate_z,
-            current_pose=current_pose,
-            ik_config=self._ik_config,
-            last_q_target=self._last_q_target,
-            clamp_reason=self.last_clamp_reason,
-            committed_x=self.committed_target_x,
-            committed_y=self.committed_target_y,
-            committed_z=self.committed_target_z,
-        )
-        self._maybe_log_ik_failure(ik_failure_diag, now_ns)
+        if (
+            state_name == "ACTIVE"
+            and current_pose is not None
+            and sim_rotation is not None
+        ):
+            q_target, ik_success, ik_reason, ik_failure_diag = solve_target_ik(
+                fk_ctx=self._fk,
+                state_name=state_name,
+                target_x=candidate_x,
+                target_y=candidate_y,
+                target_z=candidate_z,
+                target_rotation=sim_rotation,
+                q_seed=self._q_sim,
+                ik_config=self._ik_config,
+                clamp_reason=self.last_clamp_reason,
+                committed_x=self.committed_target_x,
+                committed_y=self.committed_target_y,
+                committed_z=self.committed_target_z,
+            )
+            self._maybe_log_ik_failure(ik_failure_diag, now_ns)
 
-        self.committed_target_x, self.committed_target_y, self.committed_target_z = (
-            commit_target_on_ik_success(
-                self.committed_target_x,
-                self.committed_target_y,
-                self.committed_target_z,
+        if ik_success:
+            drift_m = compute_candidate_drift_m(
+                self._fk,
                 candidate_x,
                 candidate_y,
                 candidate_z,
-                ik_success,
+                q_target,
             )
-        )
+            self._q_sim = update_q_sim_on_ik_success(self._q_sim, q_target, True)
+            (
+                self.committed_target_x,
+                self.committed_target_y,
+                self.committed_target_z,
+                self._committed_rotation,
+                current_pose,
+                fk_resync_err,
+            ) = resync_committed_from_q_sim(self._fk, self._q_sim)
+            if fk_resync_err:
+                self._fk_tick_error = fk_resync_err
+            else:
+                self._fk_tick_error = ""
+            if drift_m > self._candidate_drift_log_threshold_m:
+                self.get_logger().debug(
+                    f"IK candidate drift (log only): {drift_m:.6f} m "
+                    f"(threshold {self._candidate_drift_log_threshold_m:.6f} m)"
+                )
+            q_current_list = [float(v) for v in self._q_sim]
+            self._last_valid_fake_q = q_current_list
+            q_target = q_current_list
 
-        if self._publish_fake_joint_states:
-            self._last_valid_fake_q, _ = fake_joint_positions_to_publish(
-                enabled=True,
-                last_valid_fake_q=self._last_valid_fake_q,
-                q_current=q_current,
-                ik_success=ik_success,
-                q_target=q_target,
-            )
+        committed_target_pose = build_committed_target_pose(
+            self.committed_target_x,
+            self.committed_target_y,
+            self.committed_target_z,
+            self._committed_rotation,
+        )
 
         msg = build_cartesian_jog_state(
             state_name=state_name,
@@ -306,7 +349,8 @@ class CartesianJogCore(Node):
             output_mode=self.output_mode,
             command_age=command_age,
             current_pose=current_pose,
-            q_current=q_current,
+            target_pose=committed_target_pose,
+            q_current=q_current_list,
             q_target=q_target,
             ik_success=ik_success,
             fk_error=fk_error,
@@ -321,9 +365,12 @@ def main(args=None):
     node = CartesianJogCore()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
