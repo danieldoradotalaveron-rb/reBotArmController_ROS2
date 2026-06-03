@@ -53,12 +53,12 @@ Visualization Manager:
       Reference Frame: base_link
       Value: false
     - Class: rviz_default_plugins/Axes
-      Enabled: true
+      Enabled: false
       Length: 0.15
       Name: EndLinkAxes
       Radius: 0.01
       Reference Frame: end_link
-      Value: true
+      Value: false
     - Alpha: 0.85
       Class: rviz_default_plugins/RobotModel
       Collision Enabled: false
@@ -144,33 +144,54 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/ThirdPersonFollower
-      Distance: 0.45
+      Distance: 0.72
       Enable Stereo Rendering: true
+      Focal Point:
+        X: 0.1
+        Y: 0
+        Z: 0.03
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05
       Invert Z Axis: false
       Name: GripperFollow
       Near Clip Distance: 0.01
+      Pitch: 0.32
       Target Frame: end_link
       Value: ThirdPersonFollower (rviz)
+      Yaw: 3.14159
     Saved:
       - Class: rviz_default_plugins/ThirdPersonFollower
-        Distance: 0.45
+        Distance: 0.72
         Enable Stereo Rendering: true
+        Focal Point:
+          X: 0.1
+          Y: 0
+          Z: 0.03
         Focal Shape Fixed Size: true
         Focal Shape Size: 0.05
         Invert Z Axis: false
         Name: GripperFollow
         Near Clip Distance: 0.01
+        Pitch: 0.32
         Target Frame: end_link
         Value: ThirdPersonFollower (rviz)
-      - Class: rviz_default_plugins/FPS
+        Yaw: 3.14159
+      - Class: rviz_default_plugins/ThirdPersonFollower
+        Distance: 0.85
         Enable Stereo Rendering: true
+        Focal Point:
+          X: 0.1
+          Y: 0
+          Z: 0.03
+        Focal Shape Fixed Size: true
+        Focal Shape Size: 0.05
         Invert Z Axis: false
-        Name: GripperFPS
+        Name: GripperFollowWide
         Near Clip Distance: 0.01
+        Pitch: 0.45
         Target Frame: end_link
-        Value: FPS (rviz)
+        Value: ThirdPersonFollower (rviz)
+        Yaw: 3.14159
 Window Geometry:
   Displays:
     collapsed: false
