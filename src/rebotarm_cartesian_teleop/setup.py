@@ -35,6 +35,7 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
         (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
+        (os.path.join("share", package_name, "rviz"), glob("rviz/*.rviz")),
     ],
     install_requires=["setuptools"],
     tests_require=["pytest"],
@@ -49,6 +50,8 @@ setup(
         "console_scripts": [
             "joy_cartesian_mapper = rebotarm_cartesian_teleop.joy_cartesian_mapper:main",
             "cartesian_jog_core = rebotarm_cartesian_teleop.cartesian_jog_core:main",
+            "teleop_viz_markers = rebotarm_cartesian_teleop.teleop_viz_markers:main",
+            "teleop_validation_targets = rebotarm_cartesian_teleop.teleop_validation_targets:main",
         ],
     },
 )

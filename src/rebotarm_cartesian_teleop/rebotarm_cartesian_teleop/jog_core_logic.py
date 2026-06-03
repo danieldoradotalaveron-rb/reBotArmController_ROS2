@@ -12,7 +12,17 @@ from rebotarm_msgs.msg import CartesianJogCmd, CartesianJogState
 
 from .fk_kinematics import FkContext, compute_fk_pose_for_q
 from .fk_pose import fk_arrays_to_pose
-from .ik_kinematics import compute_ik_for_pose, joint_delta_within_limit
+from .ik_kinematics import compute_ik_for_pose, compute_ik_for_position, joint_delta_within_limit
+
+VALID_IK_TASK_MODES = frozenset({"full_6d", "position_only"})
+
+
+def parse_ik_task_mode(value: str) -> str:
+    mode = (value or "full_6d").strip().lower()
+    if mode not in VALID_IK_TASK_MODES:
+        allowed = ", ".join(sorted(VALID_IK_TASK_MODES))
+        raise ValueError(f"Invalid ik_task_mode: {value!r}; allowed: {allowed}")
+    return mode
 
 
 @dataclass(frozen=True)
@@ -21,6 +31,7 @@ class IkConfig:
     tolerance: float
     max_ik_error: float
     max_joint_delta_rad: float
+    task_mode: str = "full_6d"
 
 
 @dataclass(frozen=True)
@@ -332,17 +343,29 @@ def solve_target_ik(
     target_rot = np.asarray(target_rotation, dtype=np.float64).reshape(3, 3)
     q_seed_arr = np.asarray(q_seed, dtype=np.float64).reshape(fk_ctx.model.nq)
 
-    ik_result = compute_ik_for_pose(
-        fk_ctx.model,
-        fk_ctx.data,
-        fk_ctx.end_frame_id,
-        target_pos,
-        target_rot,
-        q_seed_arr,
-        ik_config.max_iterations,
-        ik_config.tolerance,
-        ik_config.max_ik_error,
-    )
+    if ik_config.task_mode == "position_only":
+        ik_result = compute_ik_for_position(
+            fk_ctx.model,
+            fk_ctx.data,
+            fk_ctx.end_frame_id,
+            target_pos,
+            q_seed_arr,
+            ik_config.max_iterations,
+            ik_config.tolerance,
+            ik_config.max_ik_error,
+        )
+    else:
+        ik_result = compute_ik_for_pose(
+            fk_ctx.model,
+            fk_ctx.data,
+            fk_ctx.end_frame_id,
+            target_pos,
+            target_rot,
+            q_seed_arr,
+            ik_config.max_iterations,
+            ik_config.tolerance,
+            ik_config.max_ik_error,
+        )
 
     if not ik_result.success:
         diag = _ik_failure_diagnostics(

@@ -86,6 +86,12 @@ run-cartesian-core:
 run-teleop-sim-rviz:
     bash -c '{{src_driver}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_sim_rviz.launch.py'
 
+run-teleop-validation-rviz:
+    bash -c '{{src_driver}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_validation_rviz.launch.py'
+
+run-teleop-gripper-rviz:
+    bash -c '{{src_driver}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_gripper_rviz.launch.py'
+
 # --- Services ----------------------------------------------------------------
 
 svc-park:

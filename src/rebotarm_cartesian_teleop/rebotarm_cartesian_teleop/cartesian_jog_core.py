@@ -12,7 +12,7 @@ from .fk_kinematics import (
     compute_fk_pose_for_q,
     init_fk_context,
 )
-from .ik_kinematics import compute_ik_for_pose
+from .ik_kinematics import compute_ik_for_pose, compute_ik_for_position
 from .ik_quality_diagnostics import (
     IkQualityLogConfig,
     candidate_step_m,
@@ -36,6 +36,7 @@ from .jog_core_logic import (
     compute_state_name,
     format_ik_failure_log,
     format_joint_near_limit_log,
+    parse_ik_task_mode,
     reject_ik_if_near_joint_limit,
     reject_ik_if_no_effect,
     resync_committed_from_q_sim,
@@ -72,6 +73,7 @@ class CartesianJogCore(Node):
 
         self.declare_parameter("ik_max_iterations", 100)
         self.declare_parameter("ik_tolerance", 0.001)
+        self.declare_parameter("ik_task_mode", "full_6d")
         self.declare_parameter("max_ik_error", 0.005)
         self.declare_parameter("max_joint_delta_rad", 0.25)
         self.declare_parameter("ik_failure_log_interval_s", 1.0)
@@ -209,11 +211,13 @@ class CartesianJogCore(Node):
         self._fake_joint_state_hz = float(self.get_parameter("fake_joint_state_hz").value)
         self._last_valid_fake_q: list[float] = [float(v) for v in self._q_sim]
 
+        ik_task_mode = parse_ik_task_mode(str(self.get_parameter("ik_task_mode").value))
         self._ik_config = IkConfig(
             max_iterations=int(self.get_parameter("ik_max_iterations").value),
             tolerance=float(self.get_parameter("ik_tolerance").value),
             max_ik_error=float(self.get_parameter("max_ik_error").value),
             max_joint_delta_rad=float(self.get_parameter("max_joint_delta_rad").value),
+            task_mode=ik_task_mode,
         )
 
         self.subscription = self.create_subscription(
@@ -249,6 +253,7 @@ class CartesianJogCore(Node):
         self.get_logger().info(f"Publishing to: {state_topic}")
         self.get_logger().info(f"Output mode: {self.output_mode}")
         self.get_logger().info(f"Dry run: {self.dry_run}")
+        self.get_logger().info(f"IK task mode: {self._ik_config.task_mode}")
         if self._publish_fake_joint_states:
             self.get_logger().info(
                 f"Publishing fake joint states to: {fake_joint_states_topic} "
@@ -390,17 +395,30 @@ class CartesianJogCore(Node):
             or sim_rotation is None
         ):
             return 0.0
-        ik_result = compute_ik_for_pose(
-            self._fk.model,
-            self._fk.data,
-            self._fk.end_frame_id,
-            np.array([candidate_x, candidate_y, candidate_z], dtype=np.float64),
-            sim_rotation,
-            q_seed,
-            self._ik_config.max_iterations,
-            self._ik_config.tolerance,
-            self._ik_config.max_ik_error,
-        )
+        target_pos = np.array([candidate_x, candidate_y, candidate_z], dtype=np.float64)
+        if self._ik_config.task_mode == "position_only":
+            ik_result = compute_ik_for_position(
+                self._fk.model,
+                self._fk.data,
+                self._fk.end_frame_id,
+                target_pos,
+                q_seed,
+                self._ik_config.max_iterations,
+                self._ik_config.tolerance,
+                self._ik_config.max_ik_error,
+            )
+        else:
+            ik_result = compute_ik_for_pose(
+                self._fk.model,
+                self._fk.data,
+                self._fk.end_frame_id,
+                target_pos,
+                sim_rotation,
+                q_seed,
+                self._ik_config.max_iterations,
+                self._ik_config.tolerance,
+                self._ik_config.max_ik_error,
+            )
         return float(ik_result.error)
 
     def _publish_fake_joint_state(self) -> None:

@@ -53,6 +53,8 @@ cartesian_jog_core:
 
     ik_max_iterations: 100
     ik_tolerance: 0.001
+    # ik_task_mode: full_6d
+    ik_task_mode: position_only
     max_ik_error: 0.005
     max_joint_delta_rad: 0.25
 
@@ -74,3 +76,14 @@ cartesian_jog_core:
     publish_fake_joint_states: true
     fake_joint_states_topic: /rebotarm/fake_joint_states
     fake_joint_state_hz: 50.0
+
+teleop_validation_targets:
+  ros__parameters:
+    cartesian_jog_state_topic: /rebotarm/cartesian_jog_state
+    markers_topic: /rebotarm/teleop_viz/validation_targets
+    fixed_frame: base_link
+    validation_targets_enabled: true
+    validation_target_radius_m: 0.025
+    validation_target_persistent_hit: false
+    # Flat xyz list (ROS2 params cannot use nested - [x, y, z] sequences).
+    validation_targets: [0.30, 0.00, 0.27, 0.35, 0.10, 0.27, 0.35, -0.10, 0.27, 0.30, 0.00, 0.35, 0.40, 0.00, 0.20]
