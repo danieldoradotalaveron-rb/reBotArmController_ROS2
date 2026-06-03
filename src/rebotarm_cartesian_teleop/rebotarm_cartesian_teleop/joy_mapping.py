@@ -24,6 +24,23 @@ class JoyMapperConfig:
     speed_boost_button: int = 5
     speed_scale_default: float = 1.0
     speed_scale_boost: float = 1.5
+    enable_velocity_smoothing: bool = False
+    max_linear_accel_m_s2: float = 0.25
+    velocity_smoothing_reset_on_deadman_release: bool = True
+    velocity_smoothing_reset_on_soft_stop: bool = True
+
+
+@dataclass
+class VelocitySmoothingState:
+    prev_linear_x: float = 0.0
+    prev_linear_y: float = 0.0
+    prev_linear_z: float = 0.0
+    last_publish_time_ns: int | None = None
+
+    def reset(self) -> None:
+        self.prev_linear_x = 0.0
+        self.prev_linear_y = 0.0
+        self.prev_linear_z = 0.0
 
 
 def button_pressed(joy: Joy | None, button_index: int) -> bool:
@@ -64,12 +81,80 @@ def is_joy_fresh(
     return age_s <= joy_timeout_s
 
 
+def _clamp(value: float, lo: float, hi: float) -> float:
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return value
+
+
+def resolve_smoothing_dt_s(
+    now_ns: int,
+    last_publish_time_ns: int | None,
+    publish_hz: float,
+    *,
+    max_dt_s: float = 0.5,
+) -> float:
+    """Return dt for acceleration limiting; fall back to 1/publish_hz when invalid."""
+    fallback_dt = 1.0 / publish_hz if publish_hz > 0.0 else 1.0 / 30.0
+    if last_publish_time_ns is None:
+        return fallback_dt
+    dt_s = (now_ns - last_publish_time_ns) / 1e9
+    if dt_s <= 0.0 or dt_s > max_dt_s:
+        return fallback_dt
+    return dt_s
+
+
+def smooth_linear_axis(
+    raw: float,
+    previous: float,
+    max_delta_v: float,
+) -> float:
+    delta = _clamp(raw - previous, -max_delta_v, max_delta_v)
+    return previous + delta
+
+
+def apply_linear_velocity_smoothing(
+    raw_linear_x: float,
+    raw_linear_y: float,
+    raw_linear_z: float,
+    *,
+    deadman: bool,
+    soft_stop: bool,
+    cfg: JoyMapperConfig,
+    state: VelocitySmoothingState,
+    dt_s: float,
+) -> tuple[float, float, float]:
+    """Acceleration-limit linear velocity toward raw targets."""
+    if soft_stop:
+        if cfg.velocity_smoothing_reset_on_soft_stop:
+            state.reset()
+        return 0.0, 0.0, 0.0
+
+    if not deadman:
+        if cfg.velocity_smoothing_reset_on_deadman_release:
+            state.reset()
+        return 0.0, 0.0, 0.0
+
+    max_delta_v = cfg.max_linear_accel_m_s2 * dt_s
+    smoothed_x = smooth_linear_axis(raw_linear_x, state.prev_linear_x, max_delta_v)
+    smoothed_y = smooth_linear_axis(raw_linear_y, state.prev_linear_y, max_delta_v)
+    smoothed_z = smooth_linear_axis(raw_linear_z, state.prev_linear_z, max_delta_v)
+    state.prev_linear_x = smoothed_x
+    state.prev_linear_y = smoothed_y
+    state.prev_linear_z = smoothed_z
+    return smoothed_x, smoothed_y, smoothed_z
+
+
 def map_joy_to_cmd(
     joy: Joy | None,
     cfg: JoyMapperConfig,
     *,
     latest_joy_time_ns: int | None,
     now_ns: int,
+    smoothing_state: VelocitySmoothingState | None = None,
+    publish_hz: float = 30.0,
 ) -> CartesianJogCmd | None:
     """Map Joy to CartesianJogCmd, or None if Joy is stale (do not publish)."""
     if not is_joy_fresh(latest_joy_time_ns, now_ns, cfg.joy_timeout_s):
@@ -88,15 +173,41 @@ def map_joy_to_cmd(
     y = axis_value(joy, cfg.axis_y, cfg.invert_y, cfg.deadzone)
     z = axis_value(joy, cfg.axis_z, cfg.invert_z, cfg.deadzone)
 
-    if not deadman or soft_stop:
-        x = 0.0
-        y = 0.0
-        z = 0.0
-
     scale = cfg.max_linear_velocity * speed_scale
-    msg.linear.x = x * scale
-    msg.linear.y = y * scale
-    msg.linear.z = z * scale
+    raw_linear_x = x * scale
+    raw_linear_y = y * scale
+    raw_linear_z = z * scale
+
+    if cfg.enable_velocity_smoothing and smoothing_state is not None:
+        dt_s = resolve_smoothing_dt_s(
+            now_ns,
+            smoothing_state.last_publish_time_ns,
+            publish_hz,
+        )
+        smoothing_state.last_publish_time_ns = now_ns
+        linear_x, linear_y, linear_z = apply_linear_velocity_smoothing(
+            raw_linear_x,
+            raw_linear_y,
+            raw_linear_z,
+            deadman=deadman,
+            soft_stop=soft_stop,
+            cfg=cfg,
+            state=smoothing_state,
+            dt_s=dt_s,
+        )
+    else:
+        if not deadman or soft_stop:
+            linear_x = 0.0
+            linear_y = 0.0
+            linear_z = 0.0
+        else:
+            linear_x = raw_linear_x
+            linear_y = raw_linear_y
+            linear_z = raw_linear_z
+
+    msg.linear.x = linear_x
+    msg.linear.y = linear_y
+    msg.linear.z = linear_z
 
     msg.angular.x = 0.0
     msg.angular.y = 0.0

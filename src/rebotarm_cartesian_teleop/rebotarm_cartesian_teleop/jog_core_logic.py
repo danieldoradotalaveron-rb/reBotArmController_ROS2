@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,6 +21,32 @@ class IkConfig:
     tolerance: float
     max_ik_error: float
     max_joint_delta_rad: float
+
+
+@dataclass(frozen=True)
+class IkNoEffectConfig:
+    candidate_step_min_m: float = 0.0005
+    reached_step_min_m: float = 0.0001
+    q_step_min_norm: float = 1e-6
+
+
+@dataclass(frozen=True)
+class IkNoEffectMetrics:
+    candidate_step_m: float
+    reached_step_m: float
+    q_step_norm: float
+
+
+@dataclass(frozen=True)
+class JointLimitRejectConfig:
+    reject_margin_rad: float = 0.05
+
+
+@dataclass(frozen=True)
+class JointNearLimitInfo:
+    joint: str
+    nearest_margin: float
+    nearest_side: str
 
 
 @dataclass(frozen=True)
@@ -376,6 +403,165 @@ def solve_target_ik(
         return [], False, "JOINT_DELTA_TOO_LARGE", diag
 
     return list(ik_result.q_target), True, "", None
+
+
+def _position_step_m(
+    from_pos: tuple[float, float, float],
+    to_x: float,
+    to_y: float,
+    to_z: float,
+) -> float:
+    dx = to_x - from_pos[0]
+    dy = to_y - from_pos[1]
+    dz = to_z - from_pos[2]
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def compute_ik_no_effect_metrics(
+    fk_ctx: FkContext,
+    q_sim_before: np.ndarray,
+    candidate_q: list[float] | np.ndarray,
+    candidate_x: float,
+    candidate_y: float,
+    candidate_z: float,
+    fk_position_before: tuple[float, float, float] | None = None,
+) -> IkNoEffectMetrics:
+    """Measure candidate vs reached motion after solver-reported IK success."""
+    qb = np.asarray(q_sim_before, dtype=np.float64).reshape(-1)
+    qc = np.asarray(candidate_q, dtype=np.float64).reshape(-1)
+
+    if fk_position_before is None:
+        pose, _, err = compute_fk_pose_for_q(fk_ctx, qb)
+        if err or pose is None:
+            return IkNoEffectMetrics(0.0, 0.0, 0.0)
+        fk_position_before = (
+            float(pose.position.x),
+            float(pose.position.y),
+            float(pose.position.z),
+        )
+
+    cand_step = _position_step_m(fk_position_before, candidate_x, candidate_y, candidate_z)
+
+    fk_cand_pose, _, fk_err = compute_fk_pose_for_q(fk_ctx, qc)
+    if fk_err or fk_cand_pose is None:
+        reached_step = 0.0
+    else:
+        reached_step = _position_step_m(
+            fk_position_before,
+            float(fk_cand_pose.position.x),
+            float(fk_cand_pose.position.y),
+            float(fk_cand_pose.position.z),
+        )
+
+    return IkNoEffectMetrics(
+        candidate_step_m=cand_step,
+        reached_step_m=reached_step,
+        q_step_norm=float(np.linalg.norm(qc - qb)),
+    )
+
+
+def is_ik_no_effect(metrics: IkNoEffectMetrics, config: IkNoEffectConfig) -> bool:
+    return (
+        metrics.candidate_step_m > config.candidate_step_min_m
+        and metrics.reached_step_m < config.reached_step_min_m
+        and metrics.q_step_norm < config.q_step_min_norm
+    )
+
+
+def reject_ik_if_no_effect(
+    fk_ctx: FkContext,
+    q_sim_before: np.ndarray,
+    candidate_q: list[float],
+    candidate_x: float,
+    candidate_y: float,
+    candidate_z: float,
+    config: IkNoEffectConfig,
+    fk_position_before: tuple[float, float, float] | None = None,
+) -> tuple[list[float], bool, str, IkNoEffectMetrics | None]:
+    """After solver success: reject phantom-success IK that produces no joint motion."""
+    if not candidate_q:
+        return [], False, "", None
+
+    metrics = compute_ik_no_effect_metrics(
+        fk_ctx,
+        q_sim_before,
+        candidate_q,
+        candidate_x,
+        candidate_y,
+        candidate_z,
+        fk_position_before=fk_position_before,
+    )
+    if is_ik_no_effect(metrics, config):
+        return [], False, "IK_NO_EFFECT", metrics
+    return candidate_q, True, "", metrics
+
+
+def compute_nearest_joint_limit_margin(
+    q: float,
+    lower: float,
+    upper: float,
+) -> tuple[float, str]:
+    margin_to_lower = q - lower
+    margin_to_upper = upper - q
+    if margin_to_lower <= margin_to_upper:
+        return float(margin_to_lower), "lower"
+    return float(margin_to_upper), "upper"
+
+
+def find_joint_near_limit_violation(
+    candidate_q: Sequence[float],
+    joint_names: Sequence[str],
+    lower_limits: Sequence[float],
+    upper_limits: Sequence[float],
+    reject_margin_rad: float,
+) -> JointNearLimitInfo | None:
+    """Return info for the joint closest to a hard limit below the reject threshold."""
+    qt = np.asarray(candidate_q, dtype=np.float64).reshape(-1)
+    lo = np.asarray(lower_limits, dtype=np.float64).reshape(-1)
+    hi = np.asarray(upper_limits, dtype=np.float64).reshape(-1)
+    if not (len(joint_names) == len(qt) == len(lo) == len(hi)):
+        return None
+
+    worst: JointNearLimitInfo | None = None
+    for i, name in enumerate(joint_names):
+        margin, side = compute_nearest_joint_limit_margin(float(qt[i]), float(lo[i]), float(hi[i]))
+        if margin >= float(reject_margin_rad):
+            continue
+        if worst is None or margin < worst.nearest_margin:
+            worst = JointNearLimitInfo(joint=str(name), nearest_margin=margin, nearest_side=side)
+    return worst
+
+
+def reject_ik_if_near_joint_limit(
+    candidate_q: list[float],
+    joint_names: Sequence[str],
+    lower_limits: Sequence[float],
+    upper_limits: Sequence[float],
+    config: JointLimitRejectConfig,
+) -> tuple[list[float], bool, str, JointNearLimitInfo | None]:
+    """After solver success: reject IK candidates too close to any joint hard limit."""
+    if not candidate_q or not joint_names:
+        return candidate_q, True, "", None
+
+    violation = find_joint_near_limit_violation(
+        candidate_q,
+        joint_names,
+        lower_limits,
+        upper_limits,
+        config.reject_margin_rad,
+    )
+    if violation is not None:
+        return [], False, "JOINT_NEAR_LIMIT", violation
+    return candidate_q, True, "", None
+
+
+def format_joint_near_limit_log(info: JointNearLimitInfo) -> str:
+    return (
+        "IK rejection: reason=JOINT_NEAR_LIMIT "
+        f"nearest_limit_joint={info.joint} "
+        f"nearest_limit_margin={info.nearest_margin:.4f} "
+        f"nearest_limit_side={info.nearest_side}"
+    )
 
 
 def build_cartesian_jog_state(

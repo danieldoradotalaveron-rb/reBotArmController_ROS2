@@ -10,6 +10,9 @@ from rebotarm_cartesian_teleop.fk_pose import pose_to_rotation_matrix
 from rebotarm_cartesian_teleop.jog_core_logic import IkConfig, WorkspaceLimits, solve_target_ik
 from rebotarm_cartesian_teleop.joy_mapping import JoyMapperConfig
 
+# Default teleop simulation posture (cartesian_teleop.yaml initial_q).
+TELEOP_INITIAL_Q = [0.0, -0.3, -0.3, 0.0, 0.0, 0.0]
+
 
 def default_mapper_config(**overrides) -> JoyMapperConfig:
     params = {

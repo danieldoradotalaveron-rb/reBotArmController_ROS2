@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from conftest import default_workspace, make_cmd
+from conftest import TELEOP_INITIAL_Q, default_workspace, make_cmd
 
 from rebotarm_cartesian_teleop.fk_kinematics import compute_fk_pose_for_q, init_fk_context
 from rebotarm_cartesian_teleop.jog_core_logic import (
@@ -28,8 +28,8 @@ def _sdk_available() -> bool:
 
 pytestmark = pytest.mark.skipif(not _sdk_available(), reason="reBotArm_control_py not found")
 
-# Off upper joint limits so repeated +X moves are reachable.
-INITIAL_Q = [0.0, -0.3, -0.3, 0.0, 0.0, 0.0]
+# Off upper joint limits so repeated +X moves are reachable (matches cartesian_teleop.yaml).
+INITIAL_Q = TELEOP_INITIAL_Q
 
 
 @pytest.fixture

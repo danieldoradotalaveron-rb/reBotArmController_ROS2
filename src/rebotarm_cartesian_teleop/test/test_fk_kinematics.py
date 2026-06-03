@@ -49,3 +49,15 @@ def test_fk_pose_at_zero_configuration():
     assert pose.position.y == pytest.approx(0.0, abs=1e-4)
     assert pose.position.z == pytest.approx(0.1917, abs=1e-3)
     assert pose.orientation.w == pytest.approx(1.0, abs=1e-3)
+
+
+def test_fk_pose_at_teleop_initial_configuration():
+    from conftest import TELEOP_INITIAL_Q
+
+    ctx = init_fk_context("", "end_link", TELEOP_INITIAL_Q)
+    pose, err = compute_fk_pose(ctx)
+    assert err == ""
+    assert pose is not None
+    assert pose.position.x == pytest.approx(0.2721, abs=1e-3)
+    assert pose.position.y == pytest.approx(0.0, abs=1e-4)
+    assert pose.position.z == pytest.approx(0.2697, abs=1e-3)

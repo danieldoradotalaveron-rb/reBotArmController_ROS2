@@ -26,6 +26,8 @@ from .ik_quality_diagnostics import (
 )
 from .jog_core_logic import (
     IkConfig,
+    IkNoEffectConfig,
+    JointLimitRejectConfig,
     WorkspaceLimits,
     build_cartesian_jog_state,
     build_committed_target_pose,
@@ -33,6 +35,9 @@ from .jog_core_logic import (
     compute_candidate_target,
     compute_state_name,
     format_ik_failure_log,
+    format_joint_near_limit_log,
+    reject_ik_if_near_joint_limit,
+    reject_ik_if_no_effect,
     resync_committed_from_q_sim,
     solve_target_ik,
     update_q_sim_on_ik_success,
@@ -72,12 +77,16 @@ class CartesianJogCore(Node):
         self.declare_parameter("ik_failure_log_interval_s", 1.0)
         self.declare_parameter("candidate_drift_log_threshold_m", 0.001)
         self.declare_parameter("joint_limit_warn_margin_rad", 0.35)
+        self.declare_parameter("joint_limit_reject_margin_rad", 0.05)
         self.declare_parameter("joint5_warn_abs_rad", 1.0)
         self.declare_parameter("joint4_warn_abs_rad", 1.0)
         self.declare_parameter("q_delta_warn_rad", 0.15)
         self.declare_parameter("candidate_drift_warn_m", 0.003)
         self.declare_parameter("reached_step_warn_min_m", 0.0001)
         self.declare_parameter("ik_quality_log_interval_s", 1.0)
+        self.declare_parameter("ik_no_effect_candidate_step_min_m", 0.0005)
+        self.declare_parameter("ik_no_effect_reached_step_min_m", 0.0001)
+        self.declare_parameter("ik_no_effect_q_step_min_norm", 1.0e-6)
         self.declare_parameter("publish_fake_joint_states", True)
         self.declare_parameter("fake_joint_states_topic", "/rebotarm/fake_joint_states")
         self.declare_parameter("fake_joint_state_hz", 50.0)
@@ -168,6 +177,18 @@ class CartesianJogCore(Node):
         )
         self._ik_quality_log_interval_s = float(
             self.get_parameter("ik_quality_log_interval_s").value
+        )
+        self._ik_no_effect_config = IkNoEffectConfig(
+            candidate_step_min_m=float(
+                self.get_parameter("ik_no_effect_candidate_step_min_m").value
+            ),
+            reached_step_min_m=float(
+                self.get_parameter("ik_no_effect_reached_step_min_m").value
+            ),
+            q_step_min_norm=float(self.get_parameter("ik_no_effect_q_step_min_norm").value),
+        )
+        self._joint_limit_reject_config = JointLimitRejectConfig(
+            reject_margin_rad=float(self.get_parameter("joint_limit_reject_margin_rad").value),
         )
         self._last_ik_failure_log_ns = 0
         self._last_ik_quality_log_ns = 0
@@ -270,6 +291,15 @@ class CartesianJogCore(Node):
             return
         self._last_ik_failure_log_ns = now_ns
         self.get_logger().warn(format_ik_failure_log(diag))
+
+    def _maybe_log_joint_near_limit(self, info, now_ns: int) -> None:
+        if info is None:
+            return
+        interval_ns = int(self._ik_failure_log_interval_s * 1e9)
+        if now_ns - self._last_ik_failure_log_ns < interval_ns:
+            return
+        self._last_ik_failure_log_ns = now_ns
+        self.get_logger().warn(format_joint_near_limit_log(info))
 
     def _maybe_log_ik_quality(
         self,
@@ -465,6 +495,72 @@ class CartesianJogCore(Node):
                     resolve_ik_error=lambda: self._resolve_ik_error_for_log(
                         ik_failure=True,
                         ik_failure_diag=ik_failure_diag,
+                        candidate_x=candidate_x,
+                        candidate_y=candidate_y,
+                        candidate_z=candidate_z,
+                        sim_rotation=sim_rotation,
+                        q_seed=q_before_ik,
+                    ),
+                )
+
+        if ik_success:
+            q_target, ik_success, ik_reason, joint_limit_info = reject_ik_if_near_joint_limit(
+                q_target,
+                self._joint_names,
+                self._joint_lower_limits,
+                self._joint_upper_limits,
+                self._joint_limit_reject_config,
+            )
+            if not ik_success:
+                self._maybe_log_joint_near_limit(joint_limit_info, now_ns)
+                self._maybe_log_ik_quality(
+                    q_before=q_before_ik,
+                    q_target=np.asarray(q_before_ik, dtype=np.float64),
+                    fk_position_before=fk_position_before,
+                    fk_position_target=fk_position_before,
+                    candidate_x=candidate_x,
+                    candidate_y=candidate_y,
+                    candidate_z=candidate_z,
+                    candidate_drift_m=0.0,
+                    now_ns=now_ns,
+                    ik_failure=True,
+                    resolve_ik_error=lambda: self._resolve_ik_error_for_log(
+                        ik_failure=True,
+                        ik_failure_diag=None,
+                        candidate_x=candidate_x,
+                        candidate_y=candidate_y,
+                        candidate_z=candidate_z,
+                        sim_rotation=sim_rotation,
+                        q_seed=q_before_ik,
+                    ),
+                )
+
+        if ik_success:
+            q_target, ik_success, ik_reason, _ = reject_ik_if_no_effect(
+                self._fk,
+                q_before_ik,
+                q_target,
+                candidate_x,
+                candidate_y,
+                candidate_z,
+                self._ik_no_effect_config,
+                fk_position_before=fk_position_before,
+            )
+            if not ik_success:
+                self._maybe_log_ik_quality(
+                    q_before=q_before_ik,
+                    q_target=q_before_ik,
+                    fk_position_before=fk_position_before,
+                    fk_position_target=fk_position_before,
+                    candidate_x=candidate_x,
+                    candidate_y=candidate_y,
+                    candidate_z=candidate_z,
+                    candidate_drift_m=0.0,
+                    now_ns=now_ns,
+                    ik_failure=True,
+                    resolve_ik_error=lambda: self._resolve_ik_error_for_log(
+                        ik_failure=True,
+                        ik_failure_diag=None,
                         candidate_x=candidate_x,
                         candidate_y=candidate_y,
                         candidate_z=candidate_z,

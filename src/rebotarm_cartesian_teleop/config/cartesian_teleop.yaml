@@ -22,6 +22,11 @@ joy_cartesian_mapper:
     speed_scale_default: 1.0
     speed_scale_boost: 1.5
 
+    enable_velocity_smoothing: true
+    max_linear_accel_m_s2: 0.25
+    velocity_smoothing_reset_on_deadman_release: true
+    velocity_smoothing_reset_on_soft_stop: true
+
 cartesian_jog_core:
   ros__parameters:
     cartesian_jog_cmd_topic: /rebotarm/cartesian_jog_cmd
@@ -44,7 +49,7 @@ cartesian_jog_core:
 
     urdf_path: ""
     ee_frame: end_link
-    initial_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    initial_q: [0.0, -0.3, -0.3, 0.0, 0.0, 0.0]
 
     ik_max_iterations: 100
     ik_tolerance: 0.001
@@ -54,12 +59,17 @@ cartesian_jog_core:
     ik_failure_log_interval_s: 1.0
     candidate_drift_log_threshold_m: 0.001
     joint_limit_warn_margin_rad: 0.35
+    joint_limit_reject_margin_rad: 0.05
     joint5_warn_abs_rad: 1.0
     joint4_warn_abs_rad: 1.0
     q_delta_warn_rad: 0.15
     candidate_drift_warn_m: 0.003
     reached_step_warn_min_m: 0.0001
     ik_quality_log_interval_s: 1.0
+
+    ik_no_effect_candidate_step_min_m: 0.0005
+    ik_no_effect_reached_step_min_m: 0.0001
+    ik_no_effect_q_step_min_norm: 1.0e-6
 
     publish_fake_joint_states: true
     fake_joint_states_topic: /rebotarm/fake_joint_states

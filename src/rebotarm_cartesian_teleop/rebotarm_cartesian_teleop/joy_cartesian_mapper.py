@@ -3,10 +3,12 @@ from rclpy.node import Node
 from rebotarm_msgs.msg import CartesianJogCmd
 from sensor_msgs.msg import Joy
 
-from .joy_mapping import JoyMapperConfig, map_joy_to_cmd
+from .joy_mapping import JoyMapperConfig, VelocitySmoothingState, map_joy_to_cmd
 
 
 class JoyCartesianMapper(Node):
+    _PUBLISH_HZ = 30.0
+
     def __init__(self):
         super().__init__("joy_cartesian_mapper")
 
@@ -31,6 +33,10 @@ class JoyCartesianMapper(Node):
 
         self.declare_parameter("speed_scale_default", 1.0)
         self.declare_parameter("speed_scale_boost", 1.5)
+        self.declare_parameter("enable_velocity_smoothing", True)
+        self.declare_parameter("max_linear_accel_m_s2", 0.25)
+        self.declare_parameter("velocity_smoothing_reset_on_deadman_release", True)
+        self.declare_parameter("velocity_smoothing_reset_on_soft_stop", True)
 
         joy_topic = self.get_parameter("joy_topic").value
         cmd_topic = self.get_parameter("cartesian_jog_cmd_topic").value
@@ -50,7 +56,19 @@ class JoyCartesianMapper(Node):
             speed_boost_button=int(self.get_parameter("speed_boost_button").value),
             speed_scale_default=float(self.get_parameter("speed_scale_default").value),
             speed_scale_boost=float(self.get_parameter("speed_scale_boost").value),
+            enable_velocity_smoothing=bool(
+                self.get_parameter("enable_velocity_smoothing").value
+            ),
+            max_linear_accel_m_s2=float(self.get_parameter("max_linear_accel_m_s2").value),
+            velocity_smoothing_reset_on_deadman_release=bool(
+                self.get_parameter("velocity_smoothing_reset_on_deadman_release").value
+            ),
+            velocity_smoothing_reset_on_soft_stop=bool(
+                self.get_parameter("velocity_smoothing_reset_on_soft_stop").value
+            ),
         )
+
+        self._smoothing_state = VelocitySmoothingState()
 
         self.latest_joy = None
         self.latest_joy_time_ns = None
@@ -96,6 +114,8 @@ class JoyCartesianMapper(Node):
             self._config,
             latest_joy_time_ns=self.latest_joy_time_ns,
             now_ns=now_ns,
+            smoothing_state=self._smoothing_state,
+            publish_hz=self._PUBLISH_HZ,
         )
         if msg is None:
             self.get_logger().warn(
