@@ -7,8 +7,9 @@ from conftest import default_mapper_config, default_workspace, make_joy_with_def
 
 from rebotarm_cartesian_teleop.jog_core_logic import (
     build_cartesian_jog_state,
+    commit_target_on_ik_success,
+    compute_candidate_target,
     compute_state_name,
-    integrate_target_pose,
 )
 from rebotarm_cartesian_teleop.joy_mapping import map_joy_to_cmd
 
@@ -20,30 +21,31 @@ def _tick_core(
     command_age: float,
     dt: float,
     command_timeout_s: float = 0.3,
+    ik_success: bool = True,
 ):
     ws = default_workspace()
     state = compute_state_name(latest_cmd, command_age, command_timeout_s)
-    tx, ty, tz, clamp_reason = integrate_target_pose(
-        target[0],
-        target[1],
-        target[2],
-        latest_cmd,
-        dt,
-        state,
-        ws,
-    )
+    cx, cy, cz = target
+    clamp_reason = ""
+    if state == "ACTIVE" and latest_cmd is not None:
+        candidate_x, candidate_y, candidate_z, clamp_reason = compute_candidate_target(
+            cx, cy, cz, latest_cmd, dt, ws
+        )
+        cx, cy, cz = commit_target_on_ik_success(
+            cx, cy, cz, candidate_x, candidate_y, candidate_z, ik_success
+        )
     state_msg = build_cartesian_jog_state(
         state_name=state,
-        target_x=tx,
-        target_y=ty,
-        target_z=tz,
+        target_x=cx,
+        target_y=cy,
+        target_z=cz,
         latest_cmd=latest_cmd,
         clamp_reason=clamp_reason,
         dry_run=True,
         output_mode="dry_run",
         command_age=command_age,
     )
-    return state_msg, (tx, ty, tz)
+    return state_msg, (cx, cy, cz)
 
 
 def test_mapper_to_core_deadman_active_soft_stop_timeout_sequence():

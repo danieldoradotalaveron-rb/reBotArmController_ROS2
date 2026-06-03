@@ -25,7 +25,7 @@ class IkConfig:
 @dataclass(frozen=True)
 class IkFailureDiagnostics:
     rejection_reason: str
-    target_position: tuple[float, float, float]
+    candidate_target: tuple[float, float, float]
     seed_q: tuple[float, ...]
     ik_error: float | None
     ik_iterations: int | None
@@ -34,10 +34,15 @@ class IkFailureDiagnostics:
     clamp_reason: str
     state: str
     target_rotation_from_fk: bool
+    committed_target: tuple[float, float, float] | None = None
 
 
 def format_ik_failure_log(diag: IkFailureDiagnostics) -> str:
-    tx, ty, tz = diag.target_position
+    cx, cy, cz = diag.committed_target if diag.committed_target is not None else (0.0, 0.0, 0.0)
+    tx, ty, tz = diag.candidate_target
+    committed_str = (
+        f"({cx:.4f}, {cy:.4f}, {cz:.4f})" if diag.committed_target is not None else "n/a"
+    )
     seed_str = ", ".join(f"{v:.4f}" for v in diag.seed_q)
     ik_error_str = f"{diag.ik_error:.6f}" if diag.ik_error is not None else "n/a"
     ik_iter_str = str(diag.ik_iterations) if diag.ik_iterations is not None else "n/a"
@@ -45,8 +50,8 @@ def format_ik_failure_log(diag: IkFailureDiagnostics) -> str:
     rot_src = "FK current_pose" if diag.target_rotation_from_fk else "other"
     return (
         f"IK failure: reason={diag.rejection_reason} state={diag.state} "
-        f"target=({tx:.4f}, {ty:.4f}, {tz:.4f}) seed_q=[{seed_str}] "
-        f"ik_error={ik_error_str} ik_iterations={ik_iter_str} "
+        f"committed={committed_str} candidate=({tx:.4f}, {ty:.4f}, {tz:.4f}) "
+        f"seed_q=[{seed_str}] ik_error={ik_error_str} ik_iterations={ik_iter_str} "
         f"max_ik_error={diag.max_ik_error:.6f} max_joint_delta_rad={diag.max_joint_delta_rad:.4f} "
         f"clamp_reason={clamp_str} target_rotation={rot_src}"
     )
@@ -109,6 +114,54 @@ def clamp(value: float, min_value: float, max_value: float) -> tuple[float, bool
     return value, False
 
 
+def compute_candidate_target(
+    committed_x: float,
+    committed_y: float,
+    committed_z: float,
+    latest_cmd: CartesianJogCmd,
+    dt: float,
+    workspace: WorkspaceLimits,
+) -> tuple[float, float, float, str]:
+    """Integrate joystick delta from committed target into a candidate target."""
+    vx = float(latest_cmd.linear.x)
+    vy = float(latest_cmd.linear.y)
+    vz = float(latest_cmd.linear.z)
+
+    candidate_x = committed_x + vx * dt
+    candidate_y = committed_y + vy * dt
+    candidate_z = committed_z + vz * dt
+
+    clamp_reasons: list[str] = []
+
+    candidate_x, clamped_x = clamp(candidate_x, workspace.x_min, workspace.x_max)
+    candidate_y, clamped_y = clamp(candidate_y, workspace.y_min, workspace.y_max)
+    candidate_z, clamped_z = clamp(candidate_z, workspace.z_min, workspace.z_max)
+
+    if clamped_x:
+        clamp_reasons.append("WORKSPACE_X")
+    if clamped_y:
+        clamp_reasons.append("WORKSPACE_Y")
+    if clamped_z:
+        clamp_reasons.append("WORKSPACE_Z")
+
+    return candidate_x, candidate_y, candidate_z, ",".join(clamp_reasons)
+
+
+def commit_target_on_ik_success(
+    committed_x: float,
+    committed_y: float,
+    committed_z: float,
+    candidate_x: float,
+    candidate_y: float,
+    candidate_z: float,
+    ik_success: bool,
+) -> tuple[float, float, float]:
+    """Commit candidate target only when IK accepted the motion."""
+    if ik_success:
+        return candidate_x, candidate_y, candidate_z
+    return committed_x, committed_y, committed_z
+
+
 def integrate_target_pose(
     target_x: float,
     target_y: float,
@@ -121,46 +174,31 @@ def integrate_target_pose(
     if state_name != "ACTIVE" or latest_cmd is None:
         return target_x, target_y, target_z, ""
 
-    vx = float(latest_cmd.linear.x)
-    vy = float(latest_cmd.linear.y)
-    vz = float(latest_cmd.linear.z)
-
-    target_x += vx * dt
-    target_y += vy * dt
-    target_z += vz * dt
-
-    clamp_reasons: list[str] = []
-
-    target_x, clamped_x = clamp(target_x, workspace.x_min, workspace.x_max)
-    target_y, clamped_y = clamp(target_y, workspace.y_min, workspace.y_max)
-    target_z, clamped_z = clamp(target_z, workspace.z_min, workspace.z_max)
-
-    if clamped_x:
-        clamp_reasons.append("WORKSPACE_X")
-    if clamped_y:
-        clamp_reasons.append("WORKSPACE_Y")
-    if clamped_z:
-        clamp_reasons.append("WORKSPACE_Z")
-
-    return target_x, target_y, target_z, ",".join(clamp_reasons)
+    return compute_candidate_target(target_x, target_y, target_z, latest_cmd, dt, workspace)
 
 
 def _ik_failure_diagnostics(
     *,
     reason: str,
-    target_x: float,
-    target_y: float,
-    target_z: float,
+    candidate_x: float,
+    candidate_y: float,
+    candidate_z: float,
     q_seed: np.ndarray,
     ik_config: IkConfig,
     state_name: str,
     clamp_reason: str,
+    committed_x: float | None = None,
+    committed_y: float | None = None,
+    committed_z: float | None = None,
     ik_error: float | None = None,
     ik_iterations: int | None = None,
 ) -> IkFailureDiagnostics:
+    committed = None
+    if committed_x is not None and committed_y is not None and committed_z is not None:
+        committed = (committed_x, committed_y, committed_z)
     return IkFailureDiagnostics(
         rejection_reason=reason,
-        target_position=(target_x, target_y, target_z),
+        candidate_target=(candidate_x, candidate_y, candidate_z),
         seed_q=tuple(float(v) for v in q_seed),
         ik_error=ik_error,
         ik_iterations=ik_iterations,
@@ -169,6 +207,7 @@ def _ik_failure_diagnostics(
         clamp_reason=clamp_reason,
         state=state_name,
         target_rotation_from_fk=True,
+        committed_target=committed,
     )
 
 
@@ -183,8 +222,11 @@ def solve_target_ik(
     ik_config: IkConfig,
     last_q_target: list[float] | None,
     clamp_reason: str = "",
+    committed_x: float | None = None,
+    committed_y: float | None = None,
+    committed_z: float | None = None,
 ) -> tuple[list[float], bool, str, list[float] | None, IkFailureDiagnostics | None]:
-    """Compute q_target from integrated target position and FK orientation."""
+    """Compute q_target from candidate target position and FK orientation."""
     if state_name != "ACTIVE" or not fk_ctx.ok or current_pose is None:
         return [], False, "", last_q_target, None
 
@@ -219,13 +261,16 @@ def solve_target_ik(
     if not ik_result.success:
         diag = _ik_failure_diagnostics(
             reason=ik_result.reason,
-            target_x=target_x,
-            target_y=target_y,
-            target_z=target_z,
+            candidate_x=target_x,
+            candidate_y=target_y,
+            candidate_z=target_z,
             q_seed=q_seed,
             ik_config=ik_config,
             state_name=state_name,
             clamp_reason=clamp_reason,
+            committed_x=committed_x,
+            committed_y=committed_y,
+            committed_z=committed_z,
             ik_error=ik_result.error,
             ik_iterations=ik_result.iterations,
         )
@@ -234,13 +279,16 @@ def solve_target_ik(
     if len(ik_result.q_target) != fk_ctx.model.nq:
         diag = _ik_failure_diagnostics(
             reason="INVALID_IK_RESULT",
-            target_x=target_x,
-            target_y=target_y,
-            target_z=target_z,
+            candidate_x=target_x,
+            candidate_y=target_y,
+            candidate_z=target_z,
             q_seed=q_seed,
             ik_config=ik_config,
             state_name=state_name,
             clamp_reason=clamp_reason,
+            committed_x=committed_x,
+            committed_y=committed_y,
+            committed_z=committed_z,
             ik_error=ik_result.error,
             ik_iterations=ik_result.iterations,
         )
@@ -253,13 +301,16 @@ def solve_target_ik(
     ):
         diag = _ik_failure_diagnostics(
             reason="JOINT_DELTA_TOO_LARGE",
-            target_x=target_x,
-            target_y=target_y,
-            target_z=target_z,
+            candidate_x=target_x,
+            candidate_y=target_y,
+            candidate_z=target_z,
             q_seed=q_seed,
             ik_config=ik_config,
             state_name=state_name,
             clamp_reason=clamp_reason,
+            committed_x=committed_x,
+            committed_y=committed_y,
+            committed_z=committed_z,
             ik_error=ik_result.error,
             ik_iterations=ik_result.iterations,
         )

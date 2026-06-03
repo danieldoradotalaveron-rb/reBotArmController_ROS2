@@ -43,7 +43,7 @@ def ik_config():
 def test_format_ik_failure_log_contains_required_fields():
     diag = IkFailureDiagnostics(
         rejection_reason="IK_FAILED",
-        target_position=(0.261, 0.001, 0.192),
+        candidate_target=(0.261, 0.001, 0.192),
         seed_q=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
         ik_error=0.012345,
         ik_iterations=100,
@@ -52,11 +52,13 @@ def test_format_ik_failure_log_contains_required_fields():
         clamp_reason="WORKSPACE_X",
         state="ACTIVE",
         target_rotation_from_fk=True,
+        committed_target=(0.260, 0.0, 0.192),
     )
     line = format_ik_failure_log(diag)
     assert "reason=IK_FAILED" in line
     assert "state=ACTIVE" in line
-    assert "target=(0.2610, 0.0010, 0.1920)" in line
+    assert "committed=(0.2600, 0.0000, 0.1920)" in line
+    assert "candidate=(0.2610, 0.0010, 0.1920)" in line
     assert "seed_q=[" in line
     assert "ik_error=0.012345" in line
     assert "ik_iterations=100" in line
@@ -69,7 +71,7 @@ def test_format_ik_failure_log_contains_required_fields():
 def test_format_ik_failure_log_handles_missing_solver_metrics():
     diag = IkFailureDiagnostics(
         rejection_reason="IK_EXCEPTION",
-        target_position=(0.3, 0.0, 0.2),
+        candidate_target=(0.3, 0.0, 0.2),
         seed_q=(0.0,) * 6,
         ik_error=None,
         ik_iterations=None,
@@ -103,6 +105,9 @@ def test_solve_target_ik_returns_diagnostics_on_joint_delta_rejection(fk_ctx, ik
         ik_config=strict,
         last_q_target=None,
         clamp_reason="WORKSPACE_Z",
+        committed_x=0.26,
+        committed_y=0.0,
+        committed_z=0.192,
     )
     assert ik_success is False
     assert q_target == []

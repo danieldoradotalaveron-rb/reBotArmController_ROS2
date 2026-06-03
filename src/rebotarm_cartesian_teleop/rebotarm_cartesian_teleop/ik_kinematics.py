@@ -40,7 +40,13 @@ def compute_ik_for_pose(
     tolerance: float,
     max_ik_error: float,
 ) -> IkSolveResult:
-    """Solve IK for a Cartesian target pose (deterministic, no retry)."""
+    """Solve IK for a Cartesian target pose (deterministic, no retry).
+
+    SDK ``result.success`` reflects convergence against ``ik_tolerance`` (strict).
+    For dry-run Cartesian teleop we accept any solution whose final ``error`` is
+    within ``max_ik_error``, even when the SDK marks ``success=False``. Hardware
+    output remains disabled upstream.
+    """
     ensure_rebot_sdk_in_syspath()
     from reBotArm_control_py.kinematics.inverse_kinematics import IKParams, pos_rot_to_se3, solve_ik
 
@@ -54,28 +60,20 @@ def compute_ik_for_pose(
     except Exception:
         return _failure("IK_EXCEPTION")
 
-    if not result.success:
-        return _failure("IK_FAILED", error=float(result.error), iterations=int(result.iterations))
-
-    if float(result.error) > float(max_ik_error):
-        return _failure(
-            "IK_ERROR_TOO_HIGH",
-            error=float(result.error),
-            iterations=int(result.iterations),
-        )
+    error = float(result.error)
+    iterations = int(result.iterations)
 
     if len(result.q) != model.nq:
-        return _failure(
-            "INVALID_IK_RESULT",
-            error=float(result.error),
-            iterations=int(result.iterations),
-        )
+        return _failure("INVALID_IK_RESULT", error=error, iterations=iterations)
+
+    if error > float(max_ik_error):
+        return _failure("IK_ERROR_TOO_HIGH", error=error, iterations=iterations)
 
     return IkSolveResult(
         success=True,
         q_target=[float(v) for v in result.q],
-        error=float(result.error),
-        iterations=int(result.iterations),
+        error=error,
+        iterations=iterations,
         reason="",
     )
 

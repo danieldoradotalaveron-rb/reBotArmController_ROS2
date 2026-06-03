@@ -11,9 +11,10 @@ from .jog_core_logic import (
     IkConfig,
     WorkspaceLimits,
     build_cartesian_jog_state,
+    commit_target_on_ik_success,
+    compute_candidate_target,
     compute_state_name,
     format_ik_failure_log,
-    integrate_target_pose,
     solve_target_ik,
 )
 
@@ -90,19 +91,21 @@ class CartesianJogCore(Node):
             self.get_logger().error(f"FK init failed: {self._fk.error}")
 
         target_init = initial_target_pose_from_fk(self._fk, fallback_x, fallback_y, fallback_z)
-        self.target_x = target_init.x
-        self.target_y = target_init.y
-        self.target_z = target_init.z
+        self.committed_target_x = target_init.x
+        self.committed_target_y = target_init.y
+        self.committed_target_z = target_init.z
         if target_init.from_fk:
             self.get_logger().info(
-                "Initial target_pose from FK(q_current): "
-                f"x={self.target_x:.3f}, y={self.target_y:.3f}, z={self.target_z:.3f}"
+                "Initial committed target from FK(q_current): "
+                f"x={self.committed_target_x:.3f}, y={self.committed_target_y:.3f}, "
+                f"z={self.committed_target_z:.3f}"
             )
         else:
             self.get_logger().warn(
-                "Initial target_pose using YAML fallback "
+                "Initial committed target using YAML fallback "
                 f"({target_init.fallback_reason}): "
-                f"x={self.target_x:.3f}, y={self.target_y:.3f}, z={self.target_z:.3f}"
+                f"x={self.committed_target_x:.3f}, y={self.committed_target_y:.3f}, "
+                f"z={self.committed_target_z:.3f}"
             )
 
         self.latest_cmd = None
@@ -166,8 +169,9 @@ class CartesianJogCore(Node):
         self.get_logger().info(f"Output mode: {self.output_mode}")
         self.get_logger().info(f"Dry run: {self.dry_run}")
         self.get_logger().info(
-            "Initial target pose: "
-            f"x={self.target_x:.3f}, y={self.target_y:.3f}, z={self.target_z:.3f}"
+            "Initial committed target: "
+            f"x={self.committed_target_x:.3f}, y={self.committed_target_y:.3f}, "
+            f"z={self.committed_target_z:.3f}"
         )
         if self._publish_fake_joint_states:
             self.get_logger().info(
@@ -235,30 +239,52 @@ class CartesianJogCore(Node):
             self.command_timeout_s,
         )
 
-        self.target_x, self.target_y, self.target_z, self.last_clamp_reason = integrate_target_pose(
-            self.target_x,
-            self.target_y,
-            self.target_z,
-            self.latest_cmd,
-            dt,
-            state_name,
-            self._workspace,
-        )
+        self.last_clamp_reason = ""
+
+        candidate_x = self.committed_target_x
+        candidate_y = self.committed_target_y
+        candidate_z = self.committed_target_z
+        if state_name == "ACTIVE" and self.latest_cmd is not None:
+            candidate_x, candidate_y, candidate_z, self.last_clamp_reason = (
+                compute_candidate_target(
+                    self.committed_target_x,
+                    self.committed_target_y,
+                    self.committed_target_z,
+                    self.latest_cmd,
+                    dt,
+                    self._workspace,
+                )
+            )
 
         current_pose, q_current, fk_error = self._current_pose_and_q()
 
         q_target, ik_success, ik_reason, self._last_q_target, ik_failure_diag = solve_target_ik(
             fk_ctx=self._fk,
             state_name=state_name,
-            target_x=self.target_x,
-            target_y=self.target_y,
-            target_z=self.target_z,
+            target_x=candidate_x,
+            target_y=candidate_y,
+            target_z=candidate_z,
             current_pose=current_pose,
             ik_config=self._ik_config,
             last_q_target=self._last_q_target,
             clamp_reason=self.last_clamp_reason,
+            committed_x=self.committed_target_x,
+            committed_y=self.committed_target_y,
+            committed_z=self.committed_target_z,
         )
         self._maybe_log_ik_failure(ik_failure_diag, now_ns)
+
+        self.committed_target_x, self.committed_target_y, self.committed_target_z = (
+            commit_target_on_ik_success(
+                self.committed_target_x,
+                self.committed_target_y,
+                self.committed_target_z,
+                candidate_x,
+                candidate_y,
+                candidate_z,
+                ik_success,
+            )
+        )
 
         if self._publish_fake_joint_states:
             self._last_valid_fake_q, _ = fake_joint_positions_to_publish(
@@ -271,9 +297,9 @@ class CartesianJogCore(Node):
 
         msg = build_cartesian_jog_state(
             state_name=state_name,
-            target_x=self.target_x,
-            target_y=self.target_y,
-            target_z=self.target_z,
+            target_x=self.committed_target_x,
+            target_y=self.committed_target_y,
+            target_z=self.committed_target_z,
             latest_cmd=self.latest_cmd,
             clamp_reason=self.last_clamp_reason,
             dry_run=self.dry_run,

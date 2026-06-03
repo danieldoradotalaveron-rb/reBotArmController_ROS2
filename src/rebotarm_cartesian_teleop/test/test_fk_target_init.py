@@ -9,7 +9,11 @@ from rebotarm_cartesian_teleop.fk_kinematics import (
     init_fk_context,
     initial_target_pose_from_fk,
 )
-from rebotarm_cartesian_teleop.jog_core_logic import IkConfig, solve_target_ik
+from rebotarm_cartesian_teleop.jog_core_logic import (
+    IkConfig,
+    commit_target_on_ik_success,
+    solve_target_ik,
+)
 from rebotarm_cartesian_teleop.sdk_path import ensure_rebot_sdk_in_syspath
 
 
@@ -77,18 +81,21 @@ def test_aligned_initial_target_ik_succeeds_neutral():
     assert len(q_target) == 6
 
 
-def test_integration_unchanged_after_fk_aligned_init():
+def test_integration_candidate_computes_delta_without_commit_on_ik_failure():
     from conftest import default_workspace, make_cmd
 
-    from rebotarm_cartesian_teleop.jog_core_logic import integrate_target_pose
+    from rebotarm_cartesian_teleop.jog_core_logic import compute_candidate_target
 
     fk_ctx = init_fk_context("", "end_link", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     init = initial_target_pose_from_fk(fk_ctx, 0.30, 0.0, 0.20)
     ws = default_workspace()
     cmd = make_cmd(linear_x=0.1, linear_y=0.2, linear_z=-0.1)
 
-    x, y, z, reason = integrate_target_pose(init.x, init.y, init.z, cmd, 0.1, "ACTIVE", ws)
-    assert x == pytest.approx(init.x + 0.01)
-    assert y == pytest.approx(init.y + 0.02)
-    assert z == pytest.approx(init.z - 0.01)
+    cx, cy, cz, reason = compute_candidate_target(init.x, init.y, init.z, cmd, 0.1, ws)
+    assert cx == pytest.approx(init.x + 0.01)
+    assert cy == pytest.approx(init.y + 0.02)
+    assert cz == pytest.approx(init.z - 0.01)
     assert reason == ""
+
+    unchanged = commit_target_on_ik_success(init.x, init.y, init.z, cx, cy, cz, ik_success=False)
+    assert unchanged == pytest.approx((init.x, init.y, init.z))

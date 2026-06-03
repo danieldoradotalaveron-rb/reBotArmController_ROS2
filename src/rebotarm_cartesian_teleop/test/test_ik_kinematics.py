@@ -89,7 +89,7 @@ def test_invalid_input_does_not_crash(ik_setup):
         max_ik_error=1e-3,
     )
     assert result.success is False
-    assert result.reason in ("IK_EXCEPTION", "IK_FAILED")
+    assert result.reason in ("IK_EXCEPTION", "IK_ERROR_TOO_HIGH")
     assert result.q_target == []
 
 
