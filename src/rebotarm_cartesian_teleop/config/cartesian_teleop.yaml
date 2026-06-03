@@ -13,7 +13,7 @@ joy_cartesian_mapper:
 
     deadzone: 0.15
     joy_timeout_s: 0.3
-    max_linear_velocity_m_s: 0.03
+    max_linear_velocity_m_s: 0.06
 
     deadman_button: 4
     soft_stop_button: 2
