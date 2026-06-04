@@ -9,8 +9,8 @@ from geometry_msgs.msg import Pose
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
-BLUE_COLOR = ColorRGBA(r=0.2, g=0.45, b=0.95, a=0.65)
-HIT_GREY_COLOR = ColorRGBA(r=0.55, g=0.55, b=0.55, a=0.75)
+PALE_BLUE_COLOR = ColorRGBA(r=0.55, g=0.78, b=0.95, a=0.55)
+HIT_RED_COLOR = ColorRGBA(r=0.92, g=0.22, b=0.18, a=0.85)
 VALIDATION_TARGET_NS = "teleop_validation_target"
 
 
@@ -136,7 +136,7 @@ def build_validation_target_markers(
         marker.scale.x = diameter
         marker.scale.y = diameter
         marker.scale.z = diameter
-        marker.color = HIT_GREY_COLOR if hit_flags[index] else BLUE_COLOR
+        marker.color = HIT_RED_COLOR if hit_flags[index] else PALE_BLUE_COLOR
         array.markers.append(marker)
 
     return array
@@ -174,17 +174,15 @@ def main() -> None:
     node = Node("teleop_validation_targets")
 
     default_targets = [
-        0.30, 0.00, 0.27,
-        0.35, 0.10, 0.27,
-        0.35, -0.10, 0.27,
-        0.30, 0.00, 0.35,
-        0.40, 0.00, 0.20,
+        0.24, -0.16, 0.22, 0.24, 0.16, 0.22, 0.34, -0.16, 0.22, 0.34, 0.16, 0.22,
+        0.44, 0.00, 0.22, 0.28, 0.00, 0.10, 0.38, -0.10, 0.10, 0.38, 0.10, 0.10,
+        0.30, -0.10, 0.34, 0.30, 0.10, 0.34, 0.40, 0.00, 0.34, 0.44, 0.00, 0.14,
     ]
     node.declare_parameter("cartesian_jog_state_topic", "/rebotarm/cartesian_jog_state")
     node.declare_parameter("markers_topic", "/rebotarm/teleop_viz/validation_targets")
     node.declare_parameter("fixed_frame", "base_link")
     node.declare_parameter("validation_targets_enabled", True)
-    node.declare_parameter("validation_target_radius_m", 0.025)
+    node.declare_parameter("validation_target_radius_m", 0.015)
     node.declare_parameter("validation_target_persistent_hit", False)
     node.declare_parameter("validation_targets", default_targets)
 

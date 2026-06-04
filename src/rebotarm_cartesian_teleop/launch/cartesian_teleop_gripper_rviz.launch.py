@@ -4,7 +4,7 @@ Requires the teleop stack + cartesian_teleop_validation_rviz.launch.py (or equiv
 already publishing TF, robot_description, and teleop markers.
 
   just run-teleop-validation-rviz   # window 1: base_link validation view
-  just run-teleop-gripper-rviz      # window 2: ThirdPersonFollower on end_link
+  just run-teleop-gripper-rviz      # window 2: GripperFollowD405 (87°×58° FOV, 7 cm near clip)
 """
 
 from launch.substitutions import PathJoinSubstitution

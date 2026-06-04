@@ -44,7 +44,7 @@ def test_persistent_hit_false_returns_to_blue_after_leaving():
     assert flags == [False]
 
 
-def test_persistent_hit_true_keeps_target_grey_after_first_contact():
+def test_persistent_hit_true_keeps_target_red_after_first_contact():
     tracker = ValidationHitTracker.create(1, persistent_hit=True)
     tracker.update(0.30, 0.0, 0.27, (TARGET,), 0.025)
     flags = tracker.update(0.30, 0.10, 0.27, (TARGET,), 0.025)
@@ -66,10 +66,10 @@ def test_marker_count_matches_configured_targets():
     )
     assert len(array.markers) == 3
     assert [m.id for m in array.markers] == [0, 1, 2]
-    assert array.markers[1].color.b > 0.5
-    assert array.markers[1].color.r > 0.4
-    assert array.markers[1].color.g > 0.4
+    assert array.markers[1].color.r > 0.85
+    assert array.markers[1].color.g < 0.35
     assert array.markers[0].color.b > 0.9
+    assert array.markers[0].color.g > 0.7
     assert array.markers[2].color.b > 0.9
 
 

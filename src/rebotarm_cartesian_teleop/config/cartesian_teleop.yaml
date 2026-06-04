@@ -93,8 +93,11 @@ teleop_validation_targets:
     markers_topic: /rebotarm/teleop_viz/validation_targets
     fixed_frame: base_link
     validation_targets_enabled: true
-    validation_target_radius_m: 0.03
+    validation_target_radius_m: 0.015
     validation_target_persistent_hit: false
-    # Flat xyz list (ROS2 params cannot use nested - [x, y, z] sequences).
-    # Elevated targets (z > workspace floor) plus floor grid at z=workspace_z_min for reach tests.
-    validation_targets: [0.30, 0.00, 0.27, 0.35, 0.10, 0.27, 0.35, -0.10, 0.27, 0.30, 0.00, 0.35, 0.40, 0.00, 0.20, 0.28, 0.00, 0.02, 0.32, 0.00, 0.02, 0.36, 0.00, 0.02, 0.30, 0.12, 0.02, 0.30, -0.12, 0.02, 0.36, 0.10, 0.02, 0.36, -0.10, 0.02, 0.28, 0.10, 0.02, 0.28, -0.10, 0.02]
+    # Evenly spaced targets (~10 cm apart); staggered layers to avoid vertical stacks.
+    validation_targets: [
+      0.24, -0.16, 0.22,  0.24,  0.16, 0.22,  0.34, -0.16, 0.22,  0.34,  0.16, 0.22,
+      0.44,  0.00, 0.22,  0.28,  0.00, 0.10,  0.38, -0.10, 0.10,  0.38,  0.10, 0.10,
+      0.30, -0.10, 0.34,  0.30,  0.10, 0.34,  0.40,  0.00, 0.34,  0.44,  0.00, 0.14,
+    ]
