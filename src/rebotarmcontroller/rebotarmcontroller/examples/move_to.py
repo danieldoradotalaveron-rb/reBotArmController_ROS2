@@ -97,9 +97,8 @@ class DemoMoveTo(Node):
     def _make_trajectory(self) -> JointTrajectory:
         assert self._latest_joint_state is not None
 
-        joint_names = list(self._latest_joint_state.name)
-        current = np.array(self._latest_joint_state.position, dtype=np.float64)
-        target = self._resolve_target(current)
+        joint_names, current = self._arm_joint_state()
+        target = self._resolve_target(joint_names, current)
 
         trajectory = JointTrajectory()
         trajectory.joint_names = joint_names
@@ -114,7 +113,22 @@ class DemoMoveTo(Node):
         )
         return trajectory
 
-    def _resolve_target(self, current: np.ndarray) -> np.ndarray:
+    def _arm_joint_state(self) -> tuple[list[str], np.ndarray]:
+        assert self._latest_joint_state is not None
+        pairs = [
+            (name, position)
+            for name, position in zip(
+                self._latest_joint_state.name,
+                self._latest_joint_state.position,
+            )
+            if not name.startswith("gripper_")
+        ]
+        return [name for name, _ in pairs], np.array(
+            [position for _, position in pairs],
+            dtype=np.float64,
+        )
+
+    def _resolve_target(self, joint_names: list[str], current: np.ndarray) -> np.ndarray:
         assert self._latest_joint_state is not None
 
         if self._joint_name is not None:
@@ -122,10 +136,10 @@ class DemoMoveTo(Node):
                 raise ValueError("use either 6 joint positions or --joint/--position")
             if self._joint_position is None:
                 raise ValueError("--joint requires --position")
-            if self._joint_name not in self._latest_joint_state.name:
+            if self._joint_name not in joint_names:
                 raise ValueError(f"unknown joint: {self._joint_name}")
             target = current.copy()
-            joint_index = self._latest_joint_state.name.index(self._joint_name)
+            joint_index = joint_names.index(self._joint_name)
             target[joint_index] = float(self._joint_position)
             return target
 

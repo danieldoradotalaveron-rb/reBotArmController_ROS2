@@ -15,7 +15,7 @@ joints:
     vendor: "damiao"          # damiao | myactuator | robstride
     MIT:
       kp: 120.0
-      kd: 8.0
+      kd: 10.0
     POS_VEL:
       vel_kp: 0.0125
       vel_ki: 0.004
@@ -31,7 +31,7 @@ joints:
     vendor: "damiao"
     MIT:
       kp: 120.0
-      kd: 8.0
+      kd: 10.0
     POS_VEL:
       vel_kp: 0.0125
       vel_ki: 0.004
@@ -47,7 +47,7 @@ joints:
     vendor: "damiao"
     MIT:
       kp: 120.0
-      kd: 8.0
+      kd: 10.0
     POS_VEL:
       vel_kp: 0.0125
       vel_ki: 0.004
