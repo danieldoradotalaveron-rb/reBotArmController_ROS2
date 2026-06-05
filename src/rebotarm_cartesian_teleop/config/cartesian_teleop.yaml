@@ -40,13 +40,13 @@ cartesian_jog_core:
     initial_y: 0.00
     initial_z: 0.20
 
-    workspace_x_min: 0.15
-    workspace_x_max: 0.45
-    workspace_y_min: -0.25
-    workspace_y_max: 0.25
+    workspace_x_min: -0.700
+    workspace_x_max: 0.770
+    workspace_y_min: -0.760
+    workspace_y_max: 0.760
     # Simulation floor validation. For hardware, set according to real table/base clearance.
-    workspace_z_min: 0.02
-    workspace_z_max: 0.45
+    workspace_z_min: 0.020
+    workspace_z_max: 0.650
 
     urdf_path: ""
     ee_frame: end_link
@@ -69,6 +69,14 @@ cartesian_jog_core:
     candidate_drift_warn_m: 0.003
     reached_step_warn_min_m: 0.0001
     ik_quality_log_interval_s: 1.0
+    enable_cartesian_joint1_window_diagnostics: true
+    cartesian_joint1_window_warning_rad: 0.25
+    cartesian_joint1_window_hard_rad: 1.20
+    enable_joint1_anchor_hard_gate: false
+    enable_joint1_global_operational_cap: false
+    joint1_global_operational_min_rad: -1.60
+    joint1_global_operational_max_rad: 1.60
+    joint1_large_delta_from_anchor_rad: 0.15
 
     ik_no_effect_candidate_step_min_m: 0.0005
     ik_no_effect_reached_step_min_m: 0.0001

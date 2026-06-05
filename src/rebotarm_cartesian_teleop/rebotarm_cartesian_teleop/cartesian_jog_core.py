@@ -16,17 +16,22 @@ from .ik_kinematics import compute_ik_for_pose, compute_ik_for_position
 from .ik_quality_diagnostics import (
     IkQualityLogConfig,
     candidate_step_m,
+    compute_base_sector_diagnostics,
     compute_joint_quality_diagnostics,
     format_ik_quality_diagnostics,
+    joint1_index,
     joint_limits_from_model,
     joint_names_from_model,
     pos3_from_pose,
+    resolve_joint1_warning_window_rad,
     should_log_ik_quality_diagnostics,
     with_log_reasons,
 )
 from .jog_core_logic import (
     IkConfig,
     IkNoEffectConfig,
+    Joint1AnchorWindowConfig,
+    Joint1GlobalOperationalLimitConfig,
     JointLimitRejectConfig,
     WorkspaceLimits,
     build_cartesian_jog_state,
@@ -35,12 +40,17 @@ from .jog_core_logic import (
     compute_candidate_target,
     compute_state_name,
     format_ik_failure_log,
+    format_joint1_anchor_window_log,
+    format_joint1_global_operational_limit_log,
     format_joint_near_limit_log,
     parse_ik_task_mode,
+    reject_ik_if_joint1_anchor_window,
+    reject_ik_if_joint1_global_operational_limit,
     reject_ik_if_near_joint_limit,
     reject_ik_if_no_effect,
     resync_committed_from_q_sim,
     solve_target_ik,
+    update_base_anchor_q_on_deadman_rising,
     update_q_sim_on_ik_success,
 )
 
@@ -60,20 +70,20 @@ class CartesianJogCore(Node):
         self.declare_parameter("initial_y", 0.00)
         self.declare_parameter("initial_z", 0.20)
 
-        self.declare_parameter("workspace_x_min", 0.15)
-        self.declare_parameter("workspace_x_max", 0.45)
-        self.declare_parameter("workspace_y_min", -0.25)
-        self.declare_parameter("workspace_y_max", 0.25)
-        self.declare_parameter("workspace_z_min", 0.05)
-        self.declare_parameter("workspace_z_max", 0.45)
+        self.declare_parameter("workspace_x_min", -0.700)
+        self.declare_parameter("workspace_x_max", 0.770)
+        self.declare_parameter("workspace_y_min", -0.760)
+        self.declare_parameter("workspace_y_max", 0.760)
+        self.declare_parameter("workspace_z_min", 0.020)
+        self.declare_parameter("workspace_z_max", 0.650)
 
         self.declare_parameter("urdf_path", "")
         self.declare_parameter("ee_frame", "end_link")
-        self.declare_parameter("initial_q", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.declare_parameter("initial_q", [0.0, -0.3, -0.3, 0.0, 0.0, 0.0])
 
         self.declare_parameter("ik_max_iterations", 100)
         self.declare_parameter("ik_tolerance", 0.001)
-        self.declare_parameter("ik_task_mode", "full_6d")
+        self.declare_parameter("ik_task_mode", "position_only")
         self.declare_parameter("max_ik_error", 0.005)
         self.declare_parameter("max_joint_delta_rad", 0.25)
         self.declare_parameter("ik_failure_log_interval_s", 1.0)
@@ -86,6 +96,15 @@ class CartesianJogCore(Node):
         self.declare_parameter("candidate_drift_warn_m", 0.003)
         self.declare_parameter("reached_step_warn_min_m", 0.0001)
         self.declare_parameter("ik_quality_log_interval_s", 1.0)
+        self.declare_parameter("enable_cartesian_joint1_window_diagnostics", True)
+        self.declare_parameter("cartesian_joint1_window_warning_rad", 0.25)
+        self.declare_parameter("cartesian_joint1_window_hard_rad", 1.20)
+        self.declare_parameter("cartesian_joint1_window_rad", 0.25)
+        self.declare_parameter("enable_joint1_anchor_hard_gate", False)
+        self.declare_parameter("enable_joint1_global_operational_cap", False)
+        self.declare_parameter("joint1_global_operational_min_rad", -1.60)
+        self.declare_parameter("joint1_global_operational_max_rad", 1.60)
+        self.declare_parameter("joint1_large_delta_from_anchor_rad", 0.15)
         self.declare_parameter("ik_no_effect_candidate_step_min_m", 0.0005)
         self.declare_parameter("ik_no_effect_reached_step_min_m", 0.0001)
         self.declare_parameter("ik_no_effect_q_step_min_norm", 1.0e-6)
@@ -176,6 +195,35 @@ class CartesianJogCore(Node):
             q_delta_warn_rad=float(self.get_parameter("q_delta_warn_rad").value),
             candidate_drift_warn_m=float(self.get_parameter("candidate_drift_warn_m").value),
             reached_step_warn_min_m=float(self.get_parameter("reached_step_warn_min_m").value),
+            enable_cartesian_joint1_window_diagnostics=bool(
+                self.get_parameter("enable_cartesian_joint1_window_diagnostics").value
+            ),
+            cartesian_joint1_window_warning_rad=resolve_joint1_warning_window_rad(
+                warning_rad=float(
+                    self.get_parameter("cartesian_joint1_window_warning_rad").value
+                ),
+                legacy_window_rad=float(
+                    self.get_parameter("cartesian_joint1_window_rad").value
+                ),
+            ),
+            cartesian_joint1_window_hard_rad=float(
+                self.get_parameter("cartesian_joint1_window_hard_rad").value
+            ),
+            enable_joint1_anchor_hard_gate=bool(
+                self.get_parameter("enable_joint1_anchor_hard_gate").value
+            ),
+            enable_joint1_global_operational_cap=bool(
+                self.get_parameter("enable_joint1_global_operational_cap").value
+            ),
+            joint1_global_operational_min_rad=float(
+                self.get_parameter("joint1_global_operational_min_rad").value
+            ),
+            joint1_global_operational_max_rad=float(
+                self.get_parameter("joint1_global_operational_max_rad").value
+            ),
+            joint1_large_delta_from_anchor_rad=float(
+                self.get_parameter("joint1_large_delta_from_anchor_rad").value
+            ),
         )
         self._ik_quality_log_interval_s = float(
             self.get_parameter("ik_quality_log_interval_s").value
@@ -192,8 +240,18 @@ class CartesianJogCore(Node):
         self._joint_limit_reject_config = JointLimitRejectConfig(
             reject_margin_rad=float(self.get_parameter("joint_limit_reject_margin_rad").value),
         )
+        self._joint1_global_cap_config = Joint1GlobalOperationalLimitConfig(
+            enabled=self._ik_quality_log_config.enable_joint1_global_operational_cap,
+            min_rad=self._ik_quality_log_config.joint1_global_operational_min_rad,
+            max_rad=self._ik_quality_log_config.joint1_global_operational_max_rad,
+        )
+        self._joint1_anchor_window_config = Joint1AnchorWindowConfig(
+            enabled=self._ik_quality_log_config.enable_joint1_anchor_hard_gate,
+            hard_window_rad=self._ik_quality_log_config.cartesian_joint1_window_hard_rad,
+        )
         self._last_ik_failure_log_ns = 0
         self._last_ik_quality_log_ns = 0
+        self._prev_deadman_pressed = False
 
         self._joint_names: list[str] = []
         self._joint_lower_limits: list[float] = []
@@ -203,6 +261,11 @@ class CartesianJogCore(Node):
             lo, hi = joint_limits_from_model(self._fk.model)
             self._joint_lower_limits = lo
             self._joint_upper_limits = hi
+
+        self._joint1_idx = joint1_index(self._joint_names)
+        self._base_anchor_q = (
+            float(self._q_sim[self._joint1_idx]) if self._joint1_idx is not None else 0.0
+        )
 
         self._publish_fake_joint_states = bool(
             self.get_parameter("publish_fake_joint_states").value
@@ -297,14 +360,84 @@ class CartesianJogCore(Node):
         self._last_ik_failure_log_ns = now_ns
         self.get_logger().warn(format_ik_failure_log(diag))
 
-    def _maybe_log_joint_near_limit(self, info, now_ns: int) -> None:
-        if info is None:
-            return
+    def _maybe_log_ik_rejection(self, message: str, now_ns: int) -> None:
         interval_ns = int(self._ik_failure_log_interval_s * 1e9)
         if now_ns - self._last_ik_failure_log_ns < interval_ns:
             return
         self._last_ik_failure_log_ns = now_ns
-        self.get_logger().warn(format_joint_near_limit_log(info))
+        self.get_logger().warn(message)
+
+    def _maybe_log_joint_near_limit(self, info, now_ns: int) -> None:
+        if info is None:
+            return
+        self._maybe_log_ik_rejection(format_joint_near_limit_log(info), now_ns)
+
+    def _maybe_update_base_anchor_on_deadman_rising(self, deadman_pressed: bool) -> None:
+        if self._joint1_idx is None:
+            self._prev_deadman_pressed = deadman_pressed
+            return
+        self._base_anchor_q, self._prev_deadman_pressed = update_base_anchor_q_on_deadman_rising(
+            deadman_pressed=deadman_pressed,
+            prev_deadman_pressed=self._prev_deadman_pressed,
+            joint1_q=float(self._q_sim[self._joint1_idx]),
+            base_anchor_q=self._base_anchor_q,
+        )
+
+    def _build_base_sector_diagnostics(
+        self,
+        *,
+        diag,
+        q_before: np.ndarray,
+        q_target: np.ndarray,
+        q_candidate_from_ik: list[float] | None,
+        ik_accepted: bool,
+        rejection_source: str,
+        raw_candidate_position: tuple[float, float, float],
+        clamped_candidate_position: tuple[float, float, float],
+        workspace_clamp_active: bool,
+        workspace_clamped_axes: tuple[str, ...],
+        accepted_fk_position: tuple[float, float, float] | None,
+    ):
+        if not self._ik_quality_log_config.enable_cartesian_joint1_window_diagnostics:
+            return None
+        cmd = self.latest_cmd
+        return compute_base_sector_diagnostics(
+            joint_names=self._joint_names,
+            lower_limits=self._joint_lower_limits,
+            upper_limits=self._joint_upper_limits,
+            q_before=q_before,
+            q_target_or_current=q_target,
+            base_anchor_q=self._base_anchor_q,
+            warning_window_rad=self._ik_quality_log_config.cartesian_joint1_window_warning_rad,
+            hard_window_rad=self._ik_quality_log_config.cartesian_joint1_window_hard_rad,
+            global_cap_min_rad=self._ik_quality_log_config.joint1_global_operational_min_rad,
+            global_cap_max_rad=self._ik_quality_log_config.joint1_global_operational_max_rad,
+            enable_joint1_anchor_hard_gate=(
+                self._ik_quality_log_config.enable_joint1_anchor_hard_gate
+            ),
+            enable_joint1_global_operational_cap=(
+                self._ik_quality_log_config.enable_joint1_global_operational_cap
+            ),
+            command_frame="base_link",
+            workspace_frame="base_link",
+            cartesian_command_linear_x=float(cmd.linear.x) if cmd is not None else 0.0,
+            cartesian_command_linear_y=float(cmd.linear.y) if cmd is not None else 0.0,
+            cartesian_command_linear_z=float(cmd.linear.z) if cmd is not None else 0.0,
+            raw_candidate_position=raw_candidate_position,
+            clamped_candidate_position=clamped_candidate_position,
+            workspace_clamp_active=workspace_clamp_active,
+            workspace_clamped_axes=workspace_clamped_axes,
+            ik_accepted=ik_accepted,
+            rejection_source=rejection_source,
+            nearest_limit_joint=diag.nearest_limit_joint,
+            nearest_limit_margin=diag.nearest_limit_margin,
+            posture_distance_from_initial_q=diag.posture_distance_from_initial_q,
+            q_candidate_from_ik=q_candidate_from_ik,
+            accepted_fk_position=accepted_fk_position,
+            large_delta_threshold_rad=(
+                self._ik_quality_log_config.joint1_large_delta_from_anchor_rad
+            ),
+        )
 
     def _maybe_log_ik_quality(
         self,
@@ -320,13 +453,23 @@ class CartesianJogCore(Node):
         now_ns: int,
         ik_failure: bool = False,
         resolve_ik_error=None,
+        q_candidate_from_ik: list[float] | None = None,
+        rejection_source: str = "",
+        ik_accepted: bool = False,
+        raw_candidate_position: tuple[float, float, float] | None = None,
+        workspace_clamp_active: bool = False,
+        workspace_clamped_axes: tuple[str, ...] = (),
+        accepted_fk_position: tuple[float, float, float] | None = None,
     ) -> None:
         if not self._joint_names:
             return
 
+        clamped_candidate_position = (candidate_x, candidate_y, candidate_z)
+        raw_pos = raw_candidate_position or clamped_candidate_position
+
         cand_step = candidate_step_m(
             fk_position_before,
-            (candidate_x, candidate_y, candidate_z),
+            clamped_candidate_position,
         )
         diag = compute_joint_quality_diagnostics(
             self._joint_names,
@@ -342,8 +485,24 @@ class CartesianJogCore(Node):
             candidate_step_m=cand_step,
             joint_limit_near_rad=self._ik_quality_log_config.joint_limit_warn_margin_rad,
         )
+        base_sector = self._build_base_sector_diagnostics(
+            diag=diag,
+            q_before=q_before,
+            q_target=q_target,
+            q_candidate_from_ik=q_candidate_from_ik,
+            ik_accepted=ik_accepted,
+            rejection_source=rejection_source,
+            raw_candidate_position=raw_pos,
+            clamped_candidate_position=clamped_candidate_position,
+            workspace_clamp_active=workspace_clamp_active,
+            workspace_clamped_axes=workspace_clamped_axes,
+            accepted_fk_position=accepted_fk_position,
+        )
         if not should_log_ik_quality_diagnostics(
-            diag, self._ik_quality_log_config, ik_failure=ik_failure
+            diag,
+            self._ik_quality_log_config,
+            ik_failure=ik_failure,
+            base_sector=base_sector,
         ):
             return
 
@@ -369,10 +528,31 @@ class CartesianJogCore(Node):
             candidate_step_m=cand_step,
             joint_limit_near_rad=self._ik_quality_log_config.joint_limit_warn_margin_rad,
         )
-        diag = with_log_reasons(
-            diag, self._ik_quality_log_config, ik_failure=ik_failure
+        base_sector = self._build_base_sector_diagnostics(
+            diag=diag,
+            q_before=q_before,
+            q_target=q_target,
+            q_candidate_from_ik=q_candidate_from_ik,
+            ik_accepted=ik_accepted,
+            rejection_source=rejection_source,
+            raw_candidate_position=raw_pos,
+            clamped_candidate_position=clamped_candidate_position,
+            workspace_clamp_active=workspace_clamp_active,
+            workspace_clamped_axes=workspace_clamped_axes,
+            accepted_fk_position=accepted_fk_position,
         )
-        self.get_logger().warn(format_ik_quality_diagnostics(diag))
+        diag = with_log_reasons(
+            diag,
+            self._ik_quality_log_config,
+            ik_failure=ik_failure,
+            base_sector=base_sector,
+        )
+        self.get_logger().warn(
+            format_ik_quality_diagnostics(
+                diag,
+                base_sector=base_sector,
+            )
+        )
 
     def _resolve_ik_error_for_log(
         self,
@@ -442,6 +622,14 @@ class CartesianJogCore(Node):
 
         self.last_clamp_reason = ""
 
+        deadman_pressed = (
+            self.latest_cmd is not None
+            and self.latest_cmd.deadman
+            and not self.latest_cmd.soft_stop
+            and state_name == "ACTIVE"
+        )
+        self._maybe_update_base_anchor_on_deadman_rising(deadman_pressed)
+
         current_pose, sim_rotation, fk_error = self._pose_from_q_sim()
         q_current_list = [float(v) for v in self._q_sim]
 
@@ -456,7 +644,13 @@ class CartesianJogCore(Node):
         candidate_x = sim_x
         candidate_y = sim_y
         candidate_z = sim_z
+        raw_candidate_x = sim_x
+        raw_candidate_y = sim_y
+        raw_candidate_z = sim_z
         if state_name == "ACTIVE" and self.latest_cmd is not None:
+            raw_candidate_x = sim_x + float(self.latest_cmd.linear.x) * dt
+            raw_candidate_y = sim_y + float(self.latest_cmd.linear.y) * dt
+            raw_candidate_z = sim_z + float(self.latest_cmd.linear.z) * dt
             candidate_x, candidate_y, candidate_z, self.last_clamp_reason = (
                 compute_candidate_target(
                     sim_x,
@@ -467,6 +661,11 @@ class CartesianJogCore(Node):
                     self._workspace,
                 )
             )
+
+        workspace_clamp_active = bool(self.last_clamp_reason)
+        workspace_clamped_axes = tuple(
+            part for part in self.last_clamp_reason.split(",") if part
+        )
 
         q_target: list[float] = []
         ik_success = False
@@ -510,6 +709,16 @@ class CartesianJogCore(Node):
                     candidate_drift_m=0.0,
                     now_ns=now_ns,
                     ik_failure=True,
+                    q_candidate_from_ik=None,
+                    rejection_source=ik_reason or "IK_FAILURE",
+                    ik_accepted=False,
+                    raw_candidate_position=(
+                        raw_candidate_x,
+                        raw_candidate_y,
+                        raw_candidate_z,
+                    ),
+                    workspace_clamp_active=workspace_clamp_active,
+                    workspace_clamped_axes=workspace_clamped_axes,
                     resolve_ik_error=lambda: self._resolve_ik_error_for_log(
                         ik_failure=True,
                         ik_failure_diag=ik_failure_diag,
@@ -522,6 +731,95 @@ class CartesianJogCore(Node):
                 )
 
         if ik_success:
+            q_from_ik = list(q_target)
+            q_target, ik_success, ik_reason, global_cap_info = (
+                reject_ik_if_joint1_global_operational_limit(
+                    q_target,
+                    self._joint_names,
+                    self._joint1_global_cap_config,
+                )
+            )
+            if not ik_success:
+                self._maybe_log_ik_rejection(
+                    format_joint1_global_operational_limit_log(global_cap_info),
+                    now_ns,
+                )
+                self._maybe_log_ik_quality(
+                    q_before=q_before_ik,
+                    q_target=np.asarray(q_before_ik, dtype=np.float64),
+                    fk_position_before=fk_position_before,
+                    fk_position_target=fk_position_before,
+                    candidate_x=candidate_x,
+                    candidate_y=candidate_y,
+                    candidate_z=candidate_z,
+                    candidate_drift_m=0.0,
+                    now_ns=now_ns,
+                    ik_failure=True,
+                    q_candidate_from_ik=q_from_ik,
+                    rejection_source="JOINT1_GLOBAL_OPERATIONAL_LIMIT",
+                    ik_accepted=False,
+                    raw_candidate_position=(
+                        raw_candidate_x,
+                        raw_candidate_y,
+                        raw_candidate_z,
+                    ),
+                    workspace_clamp_active=workspace_clamp_active,
+                    workspace_clamped_axes=workspace_clamped_axes,
+                    resolve_ik_error=lambda: self._resolve_ik_error_for_log(
+                        ik_failure=True,
+                        ik_failure_diag=None,
+                        candidate_x=candidate_x,
+                        candidate_y=candidate_y,
+                        candidate_z=candidate_z,
+                        sim_rotation=sim_rotation,
+                        q_seed=q_before_ik,
+                    ),
+                )
+
+        if ik_success:
+            q_from_ik = list(q_target)
+            q_target, ik_success, ik_reason, anchor_info = reject_ik_if_joint1_anchor_window(
+                q_target,
+                self._joint_names,
+                self._base_anchor_q,
+                self._joint1_anchor_window_config,
+            )
+            if not ik_success:
+                self._maybe_log_ik_rejection(format_joint1_anchor_window_log(anchor_info), now_ns)
+                self._maybe_log_ik_quality(
+                    q_before=q_before_ik,
+                    q_target=np.asarray(q_before_ik, dtype=np.float64),
+                    fk_position_before=fk_position_before,
+                    fk_position_target=fk_position_before,
+                    candidate_x=candidate_x,
+                    candidate_y=candidate_y,
+                    candidate_z=candidate_z,
+                    candidate_drift_m=0.0,
+                    now_ns=now_ns,
+                    ik_failure=True,
+                    q_candidate_from_ik=q_from_ik,
+                    rejection_source="JOINT1_ANCHOR_WINDOW",
+                    ik_accepted=False,
+                    raw_candidate_position=(
+                        raw_candidate_x,
+                        raw_candidate_y,
+                        raw_candidate_z,
+                    ),
+                    workspace_clamp_active=workspace_clamp_active,
+                    workspace_clamped_axes=workspace_clamped_axes,
+                    resolve_ik_error=lambda: self._resolve_ik_error_for_log(
+                        ik_failure=True,
+                        ik_failure_diag=None,
+                        candidate_x=candidate_x,
+                        candidate_y=candidate_y,
+                        candidate_z=candidate_z,
+                        sim_rotation=sim_rotation,
+                        q_seed=q_before_ik,
+                    ),
+                )
+
+        if ik_success:
+            q_from_ik = list(q_target)
             q_target, ik_success, ik_reason, joint_limit_info = reject_ik_if_near_joint_limit(
                 q_target,
                 self._joint_names,
@@ -542,6 +840,16 @@ class CartesianJogCore(Node):
                     candidate_drift_m=0.0,
                     now_ns=now_ns,
                     ik_failure=True,
+                    q_candidate_from_ik=q_from_ik,
+                    rejection_source="JOINT_NEAR_LIMIT",
+                    ik_accepted=False,
+                    raw_candidate_position=(
+                        raw_candidate_x,
+                        raw_candidate_y,
+                        raw_candidate_z,
+                    ),
+                    workspace_clamp_active=workspace_clamp_active,
+                    workspace_clamped_axes=workspace_clamped_axes,
                     resolve_ik_error=lambda: self._resolve_ik_error_for_log(
                         ik_failure=True,
                         ik_failure_diag=None,
@@ -554,6 +862,7 @@ class CartesianJogCore(Node):
                 )
 
         if ik_success:
+            q_from_ik = list(q_target)
             q_target, ik_success, ik_reason, _ = reject_ik_if_no_effect(
                 self._fk,
                 q_before_ik,
@@ -576,6 +885,16 @@ class CartesianJogCore(Node):
                     candidate_drift_m=0.0,
                     now_ns=now_ns,
                     ik_failure=True,
+                    q_candidate_from_ik=q_from_ik,
+                    rejection_source="IK_NO_EFFECT",
+                    ik_accepted=False,
+                    raw_candidate_position=(
+                        raw_candidate_x,
+                        raw_candidate_y,
+                        raw_candidate_z,
+                    ),
+                    workspace_clamp_active=workspace_clamp_active,
+                    workspace_clamped_axes=workspace_clamped_axes,
                     resolve_ik_error=lambda: self._resolve_ik_error_for_log(
                         ik_failure=True,
                         ik_failure_diag=None,
@@ -613,6 +932,17 @@ class CartesianJogCore(Node):
                 candidate_drift_m=drift_m,
                 now_ns=now_ns,
                 ik_failure=False,
+                q_candidate_from_ik=list(q_target),
+                rejection_source="",
+                ik_accepted=True,
+                raw_candidate_position=(
+                    raw_candidate_x,
+                    raw_candidate_y,
+                    raw_candidate_z,
+                ),
+                workspace_clamp_active=workspace_clamp_active,
+                workspace_clamped_axes=workspace_clamped_axes,
+                accepted_fk_position=fk_position_target,
                 resolve_ik_error=lambda: self._resolve_ik_error_for_log(
                     ik_failure=False,
                     ik_failure_diag=None,

@@ -27,6 +27,63 @@ class IkQualityLogConfig:
     q_delta_warn_rad: float = 0.15
     candidate_drift_warn_m: float = 0.003
     reached_step_warn_min_m: float = 0.0001
+    enable_cartesian_joint1_window_diagnostics: bool = True
+    cartesian_joint1_window_warning_rad: float = 0.25
+    cartesian_joint1_window_hard_rad: float = 1.20
+    enable_joint1_anchor_hard_gate: bool = False
+    enable_joint1_global_operational_cap: bool = False
+    joint1_global_operational_min_rad: float = -1.60
+    joint1_global_operational_max_rad: float = 1.60
+    joint1_large_delta_from_anchor_rad: float = 0.15
+
+
+@dataclass(frozen=True)
+class BaseSectorDiagnostics:
+    """Diagnostic-only joint1/base sector fields (never gate IK acceptance)."""
+
+    command_frame: str
+    command_frame_kind: str
+    workspace_frame: str
+    cartesian_command_linear_x: float
+    cartesian_command_linear_y: float
+    cartesian_command_linear_z: float
+    base_anchor_q: float
+    joint1_current_q: float
+    joint1_candidate_q: float
+    joint1_min_limit: float
+    joint1_max_limit: float
+    joint1_margin_to_lower: float
+    joint1_margin_to_upper: float
+    joint1_delta_from_anchor: float
+    abs_joint1_delta_from_anchor: float
+    joint1_would_violate_warning_window: bool
+    joint1_warning_window_rad: float
+    joint1_warning_window_error_rad: float
+    joint1_would_violate_hard_window: bool
+    joint1_hard_window_rad: float
+    joint1_hard_window_error_rad: float
+    joint1_would_violate_global_cap: bool
+    joint1_global_operational_min_rad: float
+    joint1_global_operational_max_rad: float
+    joint1_global_cap_error_rad: float
+    enable_joint1_anchor_hard_gate: bool
+    enable_joint1_global_operational_cap: bool
+    joint1_delta_this_tick: float
+    joint1_candidate_moved_this_tick: bool
+    q_before_joint1: float
+    q_committed_or_current_joint1: float
+    workspace_clamp_active: bool
+    workspace_clamped_axes: tuple[str, ...]
+    raw_candidate_position: tuple[float, float, float]
+    clamped_candidate_position: tuple[float, float, float]
+    accepted_fk_position: tuple[float, float, float] | None
+    rejected_candidate_position: tuple[float, float, float] | None
+    workspace_clamp_with_large_joint1_delta: bool
+    outcome: str
+    rejection_source: str
+    nearest_limit_joint: str
+    nearest_limit_margin: float
+    posture_distance_from_initial_q: float
 
 
 @dataclass(frozen=True)
@@ -79,6 +136,185 @@ def joint_limits_from_model(model) -> tuple[list[float], list[float]]:
 
 def _nearest_side(margin_to_lower: float, margin_to_upper: float) -> str:
     return "lower" if margin_to_lower <= margin_to_upper else "upper"
+
+
+def joint1_index(joint_names: Sequence[str]) -> int | None:
+    try:
+        return list(joint_names).index("joint1")
+    except ValueError:
+        return None
+
+
+def _window_error_rad(abs_delta: float, window_rad: float) -> float:
+    return max(0.0, abs_delta - float(window_rad))
+
+
+def _global_cap_error_rad(
+    joint1_q: float,
+    *,
+    min_rad: float,
+    max_rad: float,
+) -> float:
+    if joint1_q < min_rad:
+        return float(min_rad - joint1_q)
+    if joint1_q > max_rad:
+        return float(joint1_q - max_rad)
+    return 0.0
+
+
+def resolve_joint1_warning_window_rad(
+    *,
+    warning_rad: float,
+    legacy_window_rad: float,
+    default_rad: float = 0.25,
+) -> float:
+    """Backward-compatible alias: cartesian_joint1_window_rad -> warning threshold."""
+    if warning_rad != default_rad or legacy_window_rad == default_rad:
+        return float(warning_rad)
+    return float(legacy_window_rad)
+
+
+def compute_base_sector_diagnostics(
+    *,
+    joint_names: Sequence[str],
+    lower_limits: Sequence[float],
+    upper_limits: Sequence[float],
+    q_before: Sequence[float],
+    q_target_or_current: Sequence[float],
+    base_anchor_q: float,
+    warning_window_rad: float,
+    hard_window_rad: float,
+    global_cap_min_rad: float,
+    global_cap_max_rad: float,
+    enable_joint1_anchor_hard_gate: bool = False,
+    enable_joint1_global_operational_cap: bool = False,
+    command_frame: str,
+    workspace_frame: str,
+    cartesian_command_linear_x: float,
+    cartesian_command_linear_y: float,
+    cartesian_command_linear_z: float,
+    raw_candidate_position: Sequence[float],
+    clamped_candidate_position: Sequence[float],
+    workspace_clamp_active: bool,
+    workspace_clamped_axes: Sequence[str],
+    ik_accepted: bool,
+    rejection_source: str,
+    nearest_limit_joint: str,
+    nearest_limit_margin: float,
+    posture_distance_from_initial_q: float,
+    q_candidate_from_ik: Sequence[float] | None = None,
+    accepted_fk_position: Sequence[float] | None = None,
+    large_delta_threshold_rad: float = 0.15,
+) -> BaseSectorDiagnostics | None:
+    """Build joint1/base sector diagnostics without affecting control decisions."""
+    j1_idx = joint1_index(joint_names)
+    if j1_idx is None:
+        return None
+
+    qb = np.asarray(q_before, dtype=np.float64).reshape(-1)
+    qt = np.asarray(q_target_or_current, dtype=np.float64).reshape(-1)
+    lo = float(lower_limits[j1_idx])
+    hi = float(upper_limits[j1_idx])
+
+    joint1_current_q = float(qb[j1_idx])
+    q_before_joint1 = joint1_current_q
+    q_committed_or_current_joint1 = float(qt[j1_idx])
+
+    if q_candidate_from_ik is not None and len(q_candidate_from_ik) > j1_idx:
+        joint1_candidate_q = float(q_candidate_from_ik[j1_idx])
+    elif ik_accepted:
+        joint1_candidate_q = q_committed_or_current_joint1
+    else:
+        joint1_candidate_q = joint1_current_q
+
+    joint1_delta_this_tick = joint1_candidate_q - q_before_joint1
+    joint1_candidate_moved_this_tick = abs(joint1_delta_this_tick) > 1e-9
+
+    joint1_delta_from_anchor = joint1_candidate_q - float(base_anchor_q)
+    abs_joint1_delta_from_anchor = abs(joint1_delta_from_anchor)
+    joint1_would_violate_warning = (
+        abs_joint1_delta_from_anchor > float(warning_window_rad)
+    )
+    joint1_warning_window_error_rad = _window_error_rad(
+        abs_joint1_delta_from_anchor,
+        warning_window_rad,
+    )
+    joint1_would_violate_hard = abs_joint1_delta_from_anchor > float(hard_window_rad)
+    joint1_hard_window_error_rad = _window_error_rad(
+        abs_joint1_delta_from_anchor,
+        hard_window_rad,
+    )
+    joint1_global_cap_error_rad = _global_cap_error_rad(
+        joint1_candidate_q,
+        min_rad=global_cap_min_rad,
+        max_rad=global_cap_max_rad,
+    )
+    joint1_would_violate_global_cap = joint1_global_cap_error_rad > 0.0
+
+    margin_to_lower = joint1_candidate_q - lo
+    margin_to_upper = hi - joint1_candidate_q
+
+    raw_pos = tuple(float(v) for v in raw_candidate_position)
+    clamped_pos = tuple(float(v) for v in clamped_candidate_position)
+    axes = tuple(str(axis) for axis in workspace_clamped_axes)
+
+    accepted_pos = None
+    if accepted_fk_position is not None:
+        accepted_pos = (
+            float(accepted_fk_position[0]),
+            float(accepted_fk_position[1]),
+            float(accepted_fk_position[2]),
+        )
+    rejected_pos = clamped_pos if rejection_source else None
+
+    return BaseSectorDiagnostics(
+        command_frame=command_frame,
+        command_frame_kind="base_frame",
+        workspace_frame=workspace_frame,
+        cartesian_command_linear_x=float(cartesian_command_linear_x),
+        cartesian_command_linear_y=float(cartesian_command_linear_y),
+        cartesian_command_linear_z=float(cartesian_command_linear_z),
+        base_anchor_q=float(base_anchor_q),
+        joint1_current_q=joint1_current_q,
+        joint1_candidate_q=joint1_candidate_q,
+        joint1_min_limit=lo,
+        joint1_max_limit=hi,
+        joint1_margin_to_lower=float(margin_to_lower),
+        joint1_margin_to_upper=float(margin_to_upper),
+        joint1_delta_from_anchor=float(joint1_delta_from_anchor),
+        abs_joint1_delta_from_anchor=float(abs_joint1_delta_from_anchor),
+        joint1_would_violate_warning_window=joint1_would_violate_warning,
+        joint1_warning_window_rad=float(warning_window_rad),
+        joint1_warning_window_error_rad=float(joint1_warning_window_error_rad),
+        joint1_would_violate_hard_window=joint1_would_violate_hard,
+        joint1_hard_window_rad=float(hard_window_rad),
+        joint1_hard_window_error_rad=float(joint1_hard_window_error_rad),
+        joint1_would_violate_global_cap=joint1_would_violate_global_cap,
+        joint1_global_operational_min_rad=float(global_cap_min_rad),
+        joint1_global_operational_max_rad=float(global_cap_max_rad),
+        joint1_global_cap_error_rad=float(joint1_global_cap_error_rad),
+        enable_joint1_anchor_hard_gate=bool(enable_joint1_anchor_hard_gate),
+        enable_joint1_global_operational_cap=bool(enable_joint1_global_operational_cap),
+        joint1_delta_this_tick=float(joint1_delta_this_tick),
+        joint1_candidate_moved_this_tick=joint1_candidate_moved_this_tick,
+        q_before_joint1=q_before_joint1,
+        q_committed_or_current_joint1=q_committed_or_current_joint1,
+        workspace_clamp_active=bool(workspace_clamp_active),
+        workspace_clamped_axes=axes,
+        raw_candidate_position=raw_pos,
+        clamped_candidate_position=clamped_pos,
+        accepted_fk_position=accepted_pos,
+        rejected_candidate_position=rejected_pos,
+        workspace_clamp_with_large_joint1_delta=(
+            workspace_clamp_active
+            and abs_joint1_delta_from_anchor > float(large_delta_threshold_rad)
+        ),
+        outcome="accepted" if ik_accepted else "rejected",
+        rejection_source=str(rejection_source),
+        nearest_limit_joint=str(nearest_limit_joint),
+        nearest_limit_margin=float(nearest_limit_margin),
+        posture_distance_from_initial_q=float(posture_distance_from_initial_q),
+    )
 
 
 def _joint_diagnostic(
@@ -178,7 +414,48 @@ def compute_joint_quality_diagnostics(
     )
 
 
-def _collect_log_reasons(diag: IkQualityDiagnostics, config: IkQualityLogConfig) -> tuple[str, ...]:
+def _collect_base_sector_log_reasons(
+    base_sector: BaseSectorDiagnostics | None,
+    config: IkQualityLogConfig,
+) -> tuple[str, ...]:
+    if not config.enable_cartesian_joint1_window_diagnostics or base_sector is None:
+        return ()
+    reasons: list[str] = []
+    if base_sector.joint1_would_violate_warning_window:
+        reasons.append(
+            "joint1_would_violate_warning_window="
+            f"{base_sector.abs_joint1_delta_from_anchor:.4f}>"
+            f"{config.cartesian_joint1_window_warning_rad}"
+        )
+    if base_sector.joint1_would_violate_hard_window:
+        reasons.append(
+            "joint1_would_violate_hard_window="
+            f"{base_sector.abs_joint1_delta_from_anchor:.4f}>"
+            f"{config.cartesian_joint1_window_hard_rad}"
+        )
+    if base_sector.joint1_would_violate_global_cap:
+        reasons.append(
+            "joint1_would_violate_global_cap="
+            f"q={base_sector.joint1_candidate_q:.4f} "
+            f"range=[{config.joint1_global_operational_min_rad:.2f},"
+            f"{config.joint1_global_operational_max_rad:.2f}] "
+            f"error={base_sector.joint1_global_cap_error_rad:.4f}"
+        )
+    if base_sector.workspace_clamp_with_large_joint1_delta:
+        reasons.append(
+            "workspace_clamp_with_large_joint1_delta="
+            f"axes={','.join(base_sector.workspace_clamped_axes) or '(none)'} "
+            f"abs_joint1_delta_from_anchor={base_sector.abs_joint1_delta_from_anchor:.4f}"
+        )
+    return tuple(reasons)
+
+
+def _collect_log_reasons(
+    diag: IkQualityDiagnostics,
+    config: IkQualityLogConfig,
+    *,
+    base_sector: BaseSectorDiagnostics | None = None,
+) -> tuple[str, ...]:
     reasons: list[str] = []
     if diag.nearest_limit_margin < config.joint_limit_warn_margin_rad:
         reasons.append(
@@ -206,6 +483,7 @@ def _collect_log_reasons(diag: IkQualityDiagnostics, config: IkQualityLogConfig)
             f"reached_step_m={diag.reached_step_m:.6f}<{config.reached_step_warn_min_m}"
             f" while candidate_step_m={diag.candidate_step_m:.6f}"
         )
+    reasons.extend(_collect_base_sector_log_reasons(base_sector, config))
     return tuple(reasons)
 
 
@@ -214,10 +492,11 @@ def should_log_ik_quality_diagnostics(
     config: IkQualityLogConfig,
     *,
     ik_failure: bool = False,
+    base_sector: BaseSectorDiagnostics | None = None,
 ) -> bool:
     if ik_failure:
         return True
-    return bool(_collect_log_reasons(diag, config))
+    return bool(_collect_log_reasons(diag, config, base_sector=base_sector))
 
 
 def with_log_reasons(
@@ -225,8 +504,9 @@ def with_log_reasons(
     config: IkQualityLogConfig,
     *,
     ik_failure: bool = False,
+    base_sector: BaseSectorDiagnostics | None = None,
 ) -> IkQualityDiagnostics:
-    reasons = list(_collect_log_reasons(diag, config))
+    reasons = list(_collect_log_reasons(diag, config, base_sector=base_sector))
     if ik_failure:
         reasons.insert(0, "ik_failure")
     return IkQualityDiagnostics(
@@ -251,7 +531,111 @@ def with_log_reasons(
     )
 
 
-def format_ik_quality_diagnostics(diag: IkQualityDiagnostics) -> str:
+def format_base_sector_diagnostics(base_sector: BaseSectorDiagnostics) -> str:
+    axes = ",".join(base_sector.workspace_clamped_axes) if base_sector.workspace_clamped_axes else "(none)"
+    accepted = (
+        f"({base_sector.accepted_fk_position[0]:.4f}, "
+        f"{base_sector.accepted_fk_position[1]:.4f}, "
+        f"{base_sector.accepted_fk_position[2]:.4f})"
+        if base_sector.accepted_fk_position is not None
+        else "n/a"
+    )
+    rejected = (
+        f"({base_sector.rejected_candidate_position[0]:.4f}, "
+        f"{base_sector.rejected_candidate_position[1]:.4f}, "
+        f"{base_sector.rejected_candidate_position[2]:.4f})"
+        if base_sector.rejected_candidate_position is not None
+        else "n/a"
+    )
+    outcome_line = (
+        f"  outcome: {base_sector.outcome}"
+        if not base_sector.rejection_source
+        else f"  outcome: rejection_source={base_sector.rejection_source}"
+    )
+    return "\n".join(
+        [
+            "Base/sector diagnostics:",
+            f"  command_frame={base_sector.command_frame} "
+            f"command_frame_kind={base_sector.command_frame_kind} "
+            f"workspace_frame={base_sector.workspace_frame}",
+            (
+                "  cartesian_command_linear="
+                f"({base_sector.cartesian_command_linear_x:.4f}, "
+                f"{base_sector.cartesian_command_linear_y:.4f}, "
+                f"{base_sector.cartesian_command_linear_z:.4f})"
+            ),
+            outcome_line,
+            (
+                "  global: nearest_limit="
+                f"{base_sector.nearest_limit_joint} "
+                f"margin={base_sector.nearest_limit_margin:.4f} "
+                f"posture_dist_from_initial_q={base_sector.posture_distance_from_initial_q:.4f}"
+            ),
+            f"  base_anchor_q={base_sector.base_anchor_q:.4f}",
+            f"  joint1_current_q={base_sector.joint1_current_q:.4f}",
+            f"  joint1_candidate_q={base_sector.joint1_candidate_q:.4f}",
+            f"  q_before_joint1={base_sector.q_before_joint1:.4f}",
+            f"  q_committed_or_current_joint1={base_sector.q_committed_or_current_joint1:.4f}",
+            f"  joint1_delta_this_tick={base_sector.joint1_delta_this_tick:+.4f}",
+            (
+                "  joint1_candidate_moved_this_tick="
+                f"{base_sector.joint1_candidate_moved_this_tick}"
+            ),
+            (
+                f"  joint1_limits=[{base_sector.joint1_min_limit:.2f},"
+                f"{base_sector.joint1_max_limit:.2f}] "
+                f"margin_to_lower={base_sector.joint1_margin_to_lower:.4f} "
+                f"margin_to_upper={base_sector.joint1_margin_to_upper:.4f}"
+            ),
+            f"  joint1_delta_from_anchor={base_sector.joint1_delta_from_anchor:+.4f}",
+            f"  abs_joint1_delta_from_anchor={base_sector.abs_joint1_delta_from_anchor:.4f}",
+            (
+                "  joint1_warning_window: "
+                f"rad={base_sector.joint1_warning_window_rad:.4f} "
+                f"would_violate={base_sector.joint1_would_violate_warning_window} "
+                f"error_rad={base_sector.joint1_warning_window_error_rad:.4f}"
+            ),
+            (
+                "  joint1_hard_window: "
+                f"rad={base_sector.joint1_hard_window_rad:.4f} "
+                f"would_violate={base_sector.joint1_would_violate_hard_window} "
+                f"error_rad={base_sector.joint1_hard_window_error_rad:.4f} "
+                f"gate_enabled={base_sector.enable_joint1_anchor_hard_gate}"
+            ),
+            (
+                "  joint1_global_cap: "
+                f"min={base_sector.joint1_global_operational_min_rad:.2f} "
+                f"max={base_sector.joint1_global_operational_max_rad:.2f} "
+                f"would_violate={base_sector.joint1_would_violate_global_cap} "
+                f"error_rad={base_sector.joint1_global_cap_error_rad:.4f} "
+                f"gate_enabled={base_sector.enable_joint1_global_operational_cap}"
+            ),
+            (
+                "  workspace: raw_candidate="
+                f"({base_sector.raw_candidate_position[0]:.4f}, "
+                f"{base_sector.raw_candidate_position[1]:.4f}, "
+                f"{base_sector.raw_candidate_position[2]:.4f}) "
+                f"clamped_candidate="
+                f"({base_sector.clamped_candidate_position[0]:.4f}, "
+                f"{base_sector.clamped_candidate_position[1]:.4f}, "
+                f"{base_sector.clamped_candidate_position[2]:.4f}) "
+                f"active={base_sector.workspace_clamp_active} axes={axes}"
+            ),
+            (
+                "  workspace_clamp_with_large_joint1_delta="
+                f"{base_sector.workspace_clamp_with_large_joint1_delta}"
+            ),
+            f"  accepted_fk_position={accepted}",
+            f"  rejected_candidate_position={rejected}",
+        ]
+    )
+
+
+def format_ik_quality_diagnostics(
+    diag: IkQualityDiagnostics,
+    *,
+    base_sector: BaseSectorDiagnostics | None = None,
+) -> str:
     lines = ["IK quality diagnostics:"]
     if diag.log_reasons:
         lines.append(f"  triggers: {', '.join(diag.log_reasons)}")
@@ -300,7 +684,10 @@ def format_ik_quality_diagnostics(diag: IkQualityDiagnostics) -> str:
             f"margins=(lo+{joint.margin_to_lower:.4f}, hi-{joint.margin_to_upper:.4f}) "
             f"nearest={joint.nearest_margin:.4f} ({joint.nearest_side})"
         )
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if base_sector is not None:
+        text = f"{text}\n{format_base_sector_diagnostics(base_sector)}"
+    return text
 
 
 def pos3_from_pose(pose) -> tuple[float, float, float]:

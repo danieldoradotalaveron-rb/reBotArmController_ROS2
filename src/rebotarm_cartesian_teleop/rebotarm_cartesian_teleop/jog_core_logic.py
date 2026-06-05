@@ -61,6 +61,35 @@ class JointNearLimitInfo:
 
 
 @dataclass(frozen=True)
+class Joint1GlobalOperationalLimitConfig:
+    enabled: bool = False
+    min_rad: float = -1.60
+    max_rad: float = 1.60
+
+
+@dataclass(frozen=True)
+class Joint1AnchorWindowConfig:
+    enabled: bool = False
+    hard_window_rad: float = 1.20
+
+
+@dataclass(frozen=True)
+class Joint1GlobalOperationalLimitInfo:
+    joint1_q: float
+    min_rad: float
+    max_rad: float
+    violation_side: str
+
+
+@dataclass(frozen=True)
+class Joint1AnchorWindowInfo:
+    joint1_q: float
+    base_anchor_q: float
+    hard_window_rad: float
+    abs_delta_from_anchor: float
+
+
+@dataclass(frozen=True)
 class IkFailureDiagnostics:
     rejection_reason: str
     candidate_target: tuple[float, float, float]
@@ -142,6 +171,20 @@ def rejection_reason_for_state(state_name: str) -> str:
     if state_name == "SOFT_STOP":
         return "SOFT_STOP"
     return ""
+
+
+def update_base_anchor_q_on_deadman_rising(
+    *,
+    deadman_pressed: bool,
+    prev_deadman_pressed: bool,
+    joint1_q: float,
+    base_anchor_q: float,
+) -> tuple[float, bool]:
+    """Diagnostic-only anchor policy: reset joint1 anchor on deadman rising edge."""
+    new_anchor = base_anchor_q
+    if deadman_pressed and not prev_deadman_pressed:
+        new_anchor = float(joint1_q)
+    return new_anchor, deadman_pressed
 
 
 def clamp(value: float, min_value: float, max_value: float) -> tuple[float, bool]:
@@ -555,6 +598,85 @@ def find_joint_near_limit_violation(
     return worst
 
 
+def _joint1_index(joint_names: Sequence[str]) -> int | None:
+    try:
+        return list(joint_names).index("joint1")
+    except ValueError:
+        return None
+
+
+def reject_ik_if_joint1_global_operational_limit(
+    candidate_q: list[float],
+    joint_names: Sequence[str],
+    config: Joint1GlobalOperationalLimitConfig,
+) -> tuple[list[float], bool, str, Joint1GlobalOperationalLimitInfo | None]:
+    """After solver success: reject joint1 outside operational cap."""
+    if not config.enabled or not candidate_q:
+        return candidate_q, True, "", None
+
+    j1_idx = _joint1_index(joint_names)
+    if j1_idx is None or j1_idx >= len(candidate_q):
+        return candidate_q, True, "", None
+
+    joint1_q = float(candidate_q[j1_idx])
+    if joint1_q < float(config.min_rad):
+        return (
+            [],
+            False,
+            "JOINT1_GLOBAL_OPERATIONAL_LIMIT",
+            Joint1GlobalOperationalLimitInfo(
+                joint1_q=joint1_q,
+                min_rad=float(config.min_rad),
+                max_rad=float(config.max_rad),
+                violation_side="lower",
+            ),
+        )
+    if joint1_q > float(config.max_rad):
+        return (
+            [],
+            False,
+            "JOINT1_GLOBAL_OPERATIONAL_LIMIT",
+            Joint1GlobalOperationalLimitInfo(
+                joint1_q=joint1_q,
+                min_rad=float(config.min_rad),
+                max_rad=float(config.max_rad),
+                violation_side="upper",
+            ),
+        )
+    return candidate_q, True, "", None
+
+
+def reject_ik_if_joint1_anchor_window(
+    candidate_q: list[float],
+    joint_names: Sequence[str],
+    base_anchor_q: float,
+    config: Joint1AnchorWindowConfig,
+) -> tuple[list[float], bool, str, Joint1AnchorWindowInfo | None]:
+    """After solver success: reject joint1 drift beyond anchor hard window."""
+    if not config.enabled or not candidate_q:
+        return candidate_q, True, "", None
+
+    j1_idx = _joint1_index(joint_names)
+    if j1_idx is None or j1_idx >= len(candidate_q):
+        return candidate_q, True, "", None
+
+    joint1_q = float(candidate_q[j1_idx])
+    abs_delta = abs(joint1_q - float(base_anchor_q))
+    if abs_delta > float(config.hard_window_rad):
+        return (
+            [],
+            False,
+            "JOINT1_ANCHOR_WINDOW",
+            Joint1AnchorWindowInfo(
+                joint1_q=joint1_q,
+                base_anchor_q=float(base_anchor_q),
+                hard_window_rad=float(config.hard_window_rad),
+                abs_delta_from_anchor=abs_delta,
+            ),
+        )
+    return candidate_q, True, "", None
+
+
 def reject_ik_if_near_joint_limit(
     candidate_q: list[float],
     joint_names: Sequence[str],
@@ -584,6 +706,25 @@ def format_joint_near_limit_log(info: JointNearLimitInfo) -> str:
         f"nearest_limit_joint={info.joint} "
         f"nearest_limit_margin={info.nearest_margin:.4f} "
         f"nearest_limit_side={info.nearest_side}"
+    )
+
+
+def format_joint1_global_operational_limit_log(info: Joint1GlobalOperationalLimitInfo) -> str:
+    return (
+        "IK rejection: reason=JOINT1_GLOBAL_OPERATIONAL_LIMIT "
+        f"joint1_q={info.joint1_q:.4f} "
+        f"range=[{info.min_rad:.2f},{info.max_rad:.2f}] "
+        f"violation_side={info.violation_side}"
+    )
+
+
+def format_joint1_anchor_window_log(info: Joint1AnchorWindowInfo) -> str:
+    return (
+        "IK rejection: reason=JOINT1_ANCHOR_WINDOW "
+        f"joint1_q={info.joint1_q:.4f} "
+        f"base_anchor_q={info.base_anchor_q:.4f} "
+        f"hard_window_rad={info.hard_window_rad:.4f} "
+        f"abs_delta_from_anchor={info.abs_delta_from_anchor:.4f}"
     )
 
 
