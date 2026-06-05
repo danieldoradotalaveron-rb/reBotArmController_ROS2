@@ -1,20 +1,23 @@
-from launch import LaunchDescription
-from launch.substitutions import Command, PathJoinSubstitution
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+from rebotarm_bringup.robot_description_launch import (
+    d405_launch_arguments,
+    robot_description_parameter,
+)
+
+from launch import LaunchDescription
 
 
 def generate_launch_description():
     bringup_share = FindPackageShare("rebotarm_bringup")
-    urdf_file = PathJoinSubstitution(
-        [bringup_share, "description", "urdf", "reBot-DevArm_fixend.urdf"]
-    )
     rviz_config = PathJoinSubstitution([bringup_share, "rviz", "rebotarm.rviz"])
-    robot_description = ParameterValue(Command(["cat ", urdf_file]), value_type=str)
+    robot_description = robot_description_parameter()
 
     return LaunchDescription(
         [
+            *d405_launch_arguments(),
             Node(
                 package="robot_state_publisher",
                 executable="robot_state_publisher",

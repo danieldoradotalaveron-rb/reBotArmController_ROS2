@@ -34,7 +34,8 @@ def resolve_urdf_path(urdf_path: str) -> str | None:
         from ament_index_python.packages import get_package_share_directory
 
         share = get_package_share_directory("rebotarm_bringup")
-        return os.path.join(share, "description", "urdf", "reBot-DevArm_fixend.urdf")
+        # Arm-only core URDF (no D405 frames) so FK/IK keep exactly 6 active joints.
+        return os.path.join(share, "description", "urdf", "reBot-DevArm_fixend_core.urdf")
     except Exception:
         return None
 

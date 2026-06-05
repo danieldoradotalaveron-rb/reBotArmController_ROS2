@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    RealSense D405 eye-in-hand RIGID TF chain (placeholder, NOT calibrated).
+
+    This is TF / visual modeling only:
+      - no dynamics / inertia
+      - no camera intrinsics, no depth, no driver
+      - all joints fixed -> adds zero DOF -> does not affect FK/IK
+
+    Optical frames follow the ROS optical convention (REP-0103/0105):
+      Z forward, X right, Y down.
+  -->
+  <xacro:macro name="d405_eye_in_hand"
+               params="parent_link:='end_link'
+                       mount_xyz:='0.05 0.0 0.03'
+                       mount_rpy:='0 0 0'
+                       camera_body_xyz:='0 0 0'
+                       camera_body_rpy:='0 0 0'">
+
+    <xacro:property name="d405_optical_rpy"
+                    value="-1.5707963267948966 0 -1.5707963267948966"/>
+
+    <!-- Mount bracket: small grey box -->
+    <link name="d405_mount_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.04 0.03 0.02"/>
+        </geometry>
+        <material name="d405_mount_grey">
+          <color rgba="0.5 0.5 0.5 1"/>
+        </material>
+      </visual>
+    </link>
+
+    <joint name="d405_mount_joint" type="fixed">
+      <parent link="${parent_link}"/>
+      <child link="d405_mount_link"/>
+      <origin xyz="${mount_xyz}" rpy="${mount_rpy}"/>
+    </joint>
+
+    <!-- Camera body: small dark box -->
+    <link name="d405_camera_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.042 0.025 0.025"/>
+        </geometry>
+        <material name="d405_body_black">
+          <color rgba="0.2 0.2 0.2 1"/>
+        </material>
+      </visual>
+    </link>
+
+    <joint name="d405_camera_body_joint" type="fixed">
+      <parent link="d405_mount_link"/>
+      <child link="d405_camera_link"/>
+      <origin xyz="${camera_body_xyz}" rpy="${camera_body_rpy}"/>
+    </joint>
+
+    <!-- Color optical frame (Z forward, X right, Y down) -->
+    <link name="d405_color_optical_frame"/>
+
+    <joint name="d405_color_optical_joint" type="fixed">
+      <parent link="d405_camera_link"/>
+      <child link="d405_color_optical_frame"/>
+      <origin xyz="0 0 0" rpy="${d405_optical_rpy}"/>
+    </joint>
+
+    <!-- Depth optical frame (Z forward, X right, Y down) -->
+    <link name="d405_depth_optical_frame"/>
+
+    <joint name="d405_depth_optical_joint" type="fixed">
+      <parent link="d405_camera_link"/>
+      <child link="d405_depth_optical_frame"/>
+      <origin xyz="0 0 0" rpy="${d405_optical_rpy}"/>
+    </joint>
+
+  </xacro:macro>
+</robot>

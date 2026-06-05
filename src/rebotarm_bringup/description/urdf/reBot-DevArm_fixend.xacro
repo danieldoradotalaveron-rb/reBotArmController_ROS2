@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="reBot-DevArm_fixend">
+
+  <!--
+    Top-level robot description: arm-only core + optional rigid D405 eye-in-hand.
+
+    The arm kinematics live in reBot-DevArm_fixend_core.urdf (unchanged).
+    FK/IK consume the arm-only core file; the D405 frames below are fixed,
+    downstream children of end_link and add no DOF.
+  -->
+
+  <xacro:arg name="enable_d405" default="true"/>
+  <xacro:arg name="d405_parent_link" default="end_link"/>
+  <xacro:arg name="d405_mount_xyz" default="-0.05 0.0 0.03"/>
+  <xacro:arg name="d405_mount_rpy" default="0 0 0"/>
+  <xacro:arg name="d405_camera_body_xyz" default="0 0 0"/>
+  <xacro:arg name="d405_camera_body_rpy" default="0 0 0"/>
+
+  <!-- Arm-only kinematics (links, 6 revolute joints, end_link). -->
+  <xacro:include filename="$(find rebotarm_bringup)/description/urdf/reBot-DevArm_fixend_core.urdf"/>
+
+  <!-- Optional rigid D405 eye-in-hand TF chain under end_link. -->
+  <xacro:include filename="$(find rebotarm_bringup)/description/urdf/includes/d405_eye_in_hand.xacro"/>
+
+  <xacro:if value="$(arg enable_d405)">
+    <xacro:d405_eye_in_hand
+      parent_link="$(arg d405_parent_link)"
+      mount_xyz="$(arg d405_mount_xyz)"
+      mount_rpy="$(arg d405_mount_rpy)"
+      camera_body_xyz="$(arg d405_camera_body_xyz)"
+      camera_body_rpy="$(arg d405_camera_body_rpy)"/>
+  </xacro:if>
+
+</robot>

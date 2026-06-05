@@ -1,18 +1,24 @@
 from glob import glob
-from setuptools import setup
+from setuptools import find_packages, setup
 
 package_name = "rebotarm_bringup"
 
 setup(
     name=package_name,
     version="0.1.0",
-    packages=[],
+    packages=find_packages(exclude=["test"]),
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
         (f"share/{package_name}/config", glob("config/*.yaml")),
+        (f"share/{package_name}/description", glob("description/*.md")),
         (f"share/{package_name}/description/urdf", glob("description/urdf/*.urdf")),
+        (f"share/{package_name}/description/urdf", glob("description/urdf/*.xacro")),
+        (
+            f"share/{package_name}/description/urdf/includes",
+            glob("description/urdf/includes/*"),
+        ),
         (f"share/{package_name}/description/meshes", glob("description/meshes/*")),
         (f"share/{package_name}/rviz", glob("rviz/*.rviz")),
     ],
