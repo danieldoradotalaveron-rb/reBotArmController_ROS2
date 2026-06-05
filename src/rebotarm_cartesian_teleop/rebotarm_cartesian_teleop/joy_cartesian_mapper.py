@@ -37,6 +37,15 @@ class JoyCartesianMapper(Node):
         self.declare_parameter("max_linear_accel_m_s2", 0.25)
         self.declare_parameter("velocity_smoothing_reset_on_deadman_release", True)
         self.declare_parameter("velocity_smoothing_reset_on_soft_stop", True)
+        self.declare_parameter("enable_base_joint_jog", True)
+        self.declare_parameter("enable_local_teleop_window", True)
+        self.declare_parameter("base_jog_input_type", "axis")
+        self.declare_parameter("base_jog_axis_index", 6)
+        self.declare_parameter("base_jog_axis_deadzone", 0.5)
+        self.declare_parameter("base_jog_axis_to_joint_sign", -1.0)
+        self.declare_parameter("base_jog_left_button", 13)
+        self.declare_parameter("base_jog_right_button", 14)
+        self.declare_parameter("base_joint_jog_speed_rad_s", 0.5)
 
         joy_topic = self.get_parameter("joy_topic").value
         cmd_topic = self.get_parameter("cartesian_jog_cmd_topic").value
@@ -65,6 +74,21 @@ class JoyCartesianMapper(Node):
             ),
             velocity_smoothing_reset_on_soft_stop=bool(
                 self.get_parameter("velocity_smoothing_reset_on_soft_stop").value
+            ),
+            enable_base_joint_jog=bool(self.get_parameter("enable_base_joint_jog").value),
+            enable_local_teleop_window=bool(
+                self.get_parameter("enable_local_teleop_window").value
+            ),
+            base_jog_input_type=str(self.get_parameter("base_jog_input_type").value),
+            base_jog_axis_index=int(self.get_parameter("base_jog_axis_index").value),
+            base_jog_axis_deadzone=float(self.get_parameter("base_jog_axis_deadzone").value),
+            base_jog_axis_to_joint_sign=float(
+                self.get_parameter("base_jog_axis_to_joint_sign").value
+            ),
+            base_jog_left_button=int(self.get_parameter("base_jog_left_button").value),
+            base_jog_right_button=int(self.get_parameter("base_jog_right_button").value),
+            base_joint_jog_speed_rad_s=float(
+                self.get_parameter("base_joint_jog_speed_rad_s").value
             ),
         )
 

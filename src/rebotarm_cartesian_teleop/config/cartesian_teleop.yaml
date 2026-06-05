@@ -27,6 +27,14 @@ joy_cartesian_mapper:
     velocity_smoothing_reset_on_deadman_release: true
     velocity_smoothing_reset_on_soft_stop: true
 
+    enable_base_joint_jog: true
+    enable_local_teleop_window: true
+    base_jog_input_type: axis
+    base_jog_axis_index: 6
+    base_jog_axis_deadzone: 0.5
+    base_jog_axis_to_joint_sign: -1.0
+    base_joint_jog_speed_rad_s: 0.5
+
 cartesian_jog_core:
   ros__parameters:
     cartesian_jog_cmd_topic: /rebotarm/cartesian_jog_cmd
@@ -40,13 +48,24 @@ cartesian_jog_core:
     initial_y: 0.00
     initial_z: 0.20
 
-    workspace_x_min: -0.700
-    workspace_x_max: 0.770
-    workspace_y_min: -0.760
-    workspace_y_max: 0.760
-    # Simulation floor validation. For hardware, set according to real table/base clearance.
+    workspace_x_min: 0.150
+    workspace_x_max: 0.450
+    workspace_y_min: -0.250
+    workspace_y_max: 0.250
     workspace_z_min: 0.020
-    workspace_z_max: 0.650
+    workspace_z_max: 0.450
+
+    enable_local_teleop_window: true
+    enable_base_joint_jog: true
+    local_window_x_min_m: -0.12
+    local_window_x_max_m: 0.18
+    local_window_y_min_m: -0.25
+    local_window_y_max_m: 0.25
+    local_window_z_min_m: -0.25
+    local_window_z_max_m: 0.18
+    global_z_min_m: 0.020
+    global_z_max_m: 0.450
+    base_joint_jog_speed_rad_s: 0.5
 
     urdf_path: ""
     ee_frame: end_link
@@ -72,8 +91,8 @@ cartesian_jog_core:
     enable_cartesian_joint1_window_diagnostics: true
     cartesian_joint1_window_warning_rad: 0.25
     cartesian_joint1_window_hard_rad: 1.20
-    enable_joint1_anchor_hard_gate: false
-    enable_joint1_global_operational_cap: false
+    enable_joint1_anchor_hard_gate: true
+    enable_joint1_global_operational_cap: true
     joint1_global_operational_min_rad: -1.60
     joint1_global_operational_max_rad: 1.60
     joint1_large_delta_from_anchor_rad: 0.15

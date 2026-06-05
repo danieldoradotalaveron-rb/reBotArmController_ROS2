@@ -134,6 +134,190 @@ class WorkspaceLimits:
     z_max: float
 
 
+COMMAND_FRAME_LOCAL_WINDOW = "local_window_frame"
+
+
+@dataclass(frozen=True)
+class LocalWindowLimits:
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    z_min: float
+    z_max: float
+    global_z_min: float
+    global_z_max: float
+
+
+@dataclass(frozen=True)
+class LocalWindowState:
+    base_anchor_q: float
+    anchor_position: tuple[float, float, float]
+    local_offset: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class LocalWindowClampResult:
+    local_offset: tuple[float, float, float]
+    target_base_link: tuple[float, float, float]
+    clamp_active: bool
+    clamped_axes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BaseJogResult:
+    q_after: list[float]
+    delta_rad: float
+    before_q: float
+    after_q: float
+
+
+def compute_local_axes(
+    base_anchor_q: float,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    c = math.cos(float(base_anchor_q))
+    s = math.sin(float(base_anchor_q))
+    forward = (c, s, 0.0)
+    lateral = (-s, c, 0.0)
+    return forward, lateral
+
+
+def integrate_local_target_offset(
+    local_offset: Sequence[float],
+    v_local: Sequence[float],
+    dt: float,
+) -> tuple[float, float, float]:
+    ox, oy, oz = (float(local_offset[i]) for i in range(3))
+    vx, vy, vz = (float(v_local[i]) for i in range(3))
+    return (ox + vx * dt, oy + vy * dt, oz + vz * dt)
+
+
+def clamp_local_target_offset(
+    local_offset: Sequence[float],
+    limits: LocalWindowLimits,
+    anchor_z: float,
+) -> tuple[tuple[float, float, float], bool, tuple[str, ...]]:
+    """Clamp local x/y/z offsets; adjust oz if anchor_z+oz violates global Z."""
+    ox, oy, oz = (float(local_offset[i]) for i in range(3))
+    axes: list[str] = []
+
+    ox, cx = clamp(ox, limits.x_min, limits.x_max)
+    if cx:
+        axes.append("LOCAL_X")
+    oy, cy = clamp(oy, limits.y_min, limits.y_max)
+    if cy:
+        axes.append("LOCAL_Y")
+    oz, cz = clamp(oz, limits.z_min, limits.z_max)
+    if cz:
+        axes.append("LOCAL_Z")
+
+    tz_raw = float(anchor_z) + oz
+    if tz_raw < limits.global_z_min:
+        oz = limits.global_z_min - float(anchor_z)
+        axes.append("GLOBAL_Z")
+    elif tz_raw > limits.global_z_max:
+        oz = limits.global_z_max - float(anchor_z)
+        axes.append("GLOBAL_Z")
+
+    return (ox, oy, oz), bool(axes), tuple(axes)
+
+
+def local_target_to_base_link(
+    anchor_position: Sequence[float],
+    base_anchor_q: float,
+    local_offset: Sequence[float],
+    limits: LocalWindowLimits,
+) -> LocalWindowClampResult:
+    """Convert local offset to base_link IK target using explicit axis semantics."""
+    ax, ay, az = (float(anchor_position[i]) for i in range(3))
+    ox, oy, oz = (float(local_offset[i]) for i in range(3))
+    axes: list[str] = []
+
+    ox, cx = clamp(ox, limits.x_min, limits.x_max)
+    if cx:
+        axes.append("LOCAL_X")
+    oy, cy = clamp(oy, limits.y_min, limits.y_max)
+    if cy:
+        axes.append("LOCAL_Y")
+    oz, cz = clamp(oz, limits.z_min, limits.z_max)
+    if cz:
+        axes.append("LOCAL_Z")
+
+    forward, lateral = compute_local_axes(base_anchor_q)
+    tx = ax + forward[0] * ox + lateral[0] * oy
+    ty = ay + forward[1] * ox + lateral[1] * oy
+    tz_raw = az + oz
+    tz, gz = clamp(tz_raw, limits.global_z_min, limits.global_z_max)
+    if gz:
+        axes.append("GLOBAL_Z")
+        oz = tz - az
+
+    return LocalWindowClampResult(
+        local_offset=(ox, oy, oz),
+        target_base_link=(tx, ty, tz),
+        clamp_active=bool(axes),
+        clamped_axes=tuple(axes),
+    )
+
+
+def reanchor_local_window_from_fk(
+    *,
+    fk_position: Sequence[float],
+    joint1_q: float,
+) -> LocalWindowState:
+    return LocalWindowState(
+        base_anchor_q=float(joint1_q),
+        anchor_position=(
+            float(fk_position[0]),
+            float(fk_position[1]),
+            float(fk_position[2]),
+        ),
+        local_offset=(0.0, 0.0, 0.0),
+    )
+
+
+def apply_base_joint1_jog(
+    q: Sequence[float],
+    *,
+    joint1_index: int,
+    velocity_rad_s: float,
+    dt: float,
+    min_rad: float,
+    max_rad: float,
+) -> BaseJogResult:
+    qb = [float(v) for v in q]
+    before_q = float(qb[joint1_index])
+    after_q, _ = clamp(before_q + float(velocity_rad_s) * float(dt), min_rad, max_rad)
+    qb[joint1_index] = after_q
+    return BaseJogResult(
+        q_after=qb,
+        delta_rad=after_q - before_q,
+        before_q=before_q,
+        after_q=after_q,
+    )
+
+
+def integrate_local_window_candidate(
+    local_state: LocalWindowState,
+    v_local: Sequence[float],
+    dt: float,
+    limits: LocalWindowLimits,
+) -> tuple[LocalWindowState, LocalWindowClampResult]:
+    new_offset = integrate_local_target_offset(local_state.local_offset, v_local, dt)
+    clamp_result = local_target_to_base_link(
+        local_state.anchor_position,
+        local_state.base_anchor_q,
+        new_offset,
+        limits,
+    )
+    updated = LocalWindowState(
+        base_anchor_q=local_state.base_anchor_q,
+        anchor_position=local_state.anchor_position,
+        local_offset=clamp_result.local_offset,
+    )
+    return updated, clamp_result
+
+
 def compute_state_name(
     latest_cmd: CartesianJogCmd | None,
     command_age: float,

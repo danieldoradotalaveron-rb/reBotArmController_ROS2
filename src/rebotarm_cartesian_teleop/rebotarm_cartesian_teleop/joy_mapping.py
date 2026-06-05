@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from rebotarm_msgs.msg import CartesianJogCmd
 from sensor_msgs.msg import Joy
 
+from .jog_core_logic import COMMAND_FRAME_LOCAL_WINDOW
+
 
 @dataclass(frozen=True)
 class JoyMapperConfig:
@@ -28,6 +30,15 @@ class JoyMapperConfig:
     max_linear_accel_m_s2: float = 0.25
     velocity_smoothing_reset_on_deadman_release: bool = True
     velocity_smoothing_reset_on_soft_stop: bool = True
+    enable_base_joint_jog: bool = True
+    enable_local_teleop_window: bool = True
+    base_jog_input_type: str = "axis"
+    base_jog_axis_index: int = 6
+    base_jog_axis_deadzone: float = 0.5
+    base_jog_axis_to_joint_sign: float = -1.0
+    base_jog_left_button: int = 13
+    base_jog_right_button: int = 14
+    base_joint_jog_speed_rad_s: float = 0.5
 
 
 @dataclass
@@ -36,6 +47,7 @@ class VelocitySmoothingState:
     prev_linear_y: float = 0.0
     prev_linear_z: float = 0.0
     last_publish_time_ns: int | None = None
+    prev_base_jog_active: bool = False
 
     def reset(self) -> None:
         self.prev_linear_x = 0.0
@@ -49,6 +61,14 @@ def button_pressed(joy: Joy | None, button_index: int) -> bool:
     if button_index < 0 or button_index >= len(joy.buttons):
         return False
     return joy.buttons[button_index] == 1
+
+
+def raw_axis_value(joy: Joy | None, axis_index: int) -> float:
+    if joy is None:
+        return 0.0
+    if axis_index < 0 or axis_index >= len(joy.axes):
+        return 0.0
+    return float(joy.axes[axis_index])
 
 
 def axis_value(
@@ -147,6 +167,36 @@ def apply_linear_velocity_smoothing(
     return smoothed_x, smoothed_y, smoothed_z
 
 
+def resolve_base_jog_from_joy(
+    joy: Joy | None,
+    cfg: JoyMapperConfig,
+) -> tuple[bool, float]:
+    """Map D-pad / base-jog input to joint1 jog velocity (rad/s)."""
+    if not cfg.enable_base_joint_jog:
+        return False, 0.0
+
+    raw_axis = 0.0
+    input_type = (cfg.base_jog_input_type or "axis").strip().lower()
+    if input_type == "button":
+        left = button_pressed(joy, cfg.base_jog_left_button)
+        right = button_pressed(joy, cfg.base_jog_right_button)
+        if left and not right:
+            raw_axis = 1.0
+        elif right and not left:
+            raw_axis = -1.0
+        else:
+            return False, 0.0
+    else:
+        raw_axis = raw_axis_value(joy, cfg.base_jog_axis_index)
+        if abs(raw_axis) < cfg.base_jog_axis_deadzone:
+            return False, 0.0
+
+    velocity = (
+        raw_axis * float(cfg.base_jog_axis_to_joint_sign) * float(cfg.base_joint_jog_speed_rad_s)
+    )
+    return True, velocity
+
+
 def map_joy_to_cmd(
     joy: Joy | None,
     cfg: JoyMapperConfig,
@@ -169,14 +219,19 @@ def map_joy_to_cmd(
 
     speed_scale = cfg.speed_scale_boost if speed_boost else cfg.speed_scale_default
 
+    base_jog_active, joint1_jog_velocity = resolve_base_jog_from_joy(joy, cfg)
+
+    if smoothing_state is not None and smoothing_state.prev_base_jog_active and not base_jog_active:
+        smoothing_state.reset()
+
     x = axis_value(joy, cfg.axis_x, cfg.invert_x, cfg.deadzone)
     y = axis_value(joy, cfg.axis_y, cfg.invert_y, cfg.deadzone)
     z = axis_value(joy, cfg.axis_z, cfg.invert_z, cfg.deadzone)
 
     scale = cfg.max_linear_velocity * speed_scale
-    raw_linear_x = x * scale
-    raw_linear_y = y * scale
-    raw_linear_z = z * scale
+    raw_linear_x = 0.0 if base_jog_active else x * scale
+    raw_linear_y = 0.0 if base_jog_active else y * scale
+    raw_linear_z = 0.0 if base_jog_active else z * scale
 
     if cfg.enable_velocity_smoothing and smoothing_state is not None:
         dt_s = resolve_smoothing_dt_s(
@@ -217,5 +272,15 @@ def map_joy_to_cmd(
     msg.soft_stop = soft_stop
     msg.speed_scale = speed_scale
     msg.enable_orientation = False
+    msg.base_jog_active = base_jog_active
+    msg.joint1_jog_velocity_rad_s = float(joint1_jog_velocity)
+    msg.command_frame_kind = (
+        COMMAND_FRAME_LOCAL_WINDOW
+        if cfg.enable_local_teleop_window
+        else "base_link"
+    )
+
+    if smoothing_state is not None:
+        smoothing_state.prev_base_jog_active = base_jog_active
 
     return msg

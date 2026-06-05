@@ -15,6 +15,10 @@ from .fk_kinematics import (
 from .ik_kinematics import compute_ik_for_pose, compute_ik_for_position
 from .ik_quality_diagnostics import (
     IkQualityLogConfig,
+    LocalWindowDiagnostics,
+    LocalWindowLimitsView,
+    _global_cap_error_rad,
+    _window_error_rad,
     candidate_step_m,
     compute_base_sector_diagnostics,
     compute_joint_quality_diagnostics,
@@ -28,29 +32,37 @@ from .ik_quality_diagnostics import (
     with_log_reasons,
 )
 from .jog_core_logic import (
+    COMMAND_FRAME_LOCAL_WINDOW,
+    BaseJogResult,
     IkConfig,
     IkNoEffectConfig,
     Joint1AnchorWindowConfig,
     Joint1GlobalOperationalLimitConfig,
     JointLimitRejectConfig,
+    LocalWindowLimits,
+    LocalWindowState,
     WorkspaceLimits,
+    apply_base_joint1_jog,
     build_cartesian_jog_state,
     build_committed_target_pose,
     compute_candidate_drift_m,
     compute_candidate_target,
+    compute_local_axes,
     compute_state_name,
     format_ik_failure_log,
     format_joint1_anchor_window_log,
     format_joint1_global_operational_limit_log,
     format_joint_near_limit_log,
+    integrate_local_target_offset,
+    integrate_local_window_candidate,
     parse_ik_task_mode,
+    reanchor_local_window_from_fk,
     reject_ik_if_joint1_anchor_window,
     reject_ik_if_joint1_global_operational_limit,
     reject_ik_if_near_joint_limit,
     reject_ik_if_no_effect,
     resync_committed_from_q_sim,
     solve_target_ik,
-    update_base_anchor_q_on_deadman_rising,
     update_q_sim_on_ik_success,
 )
 
@@ -70,12 +82,23 @@ class CartesianJogCore(Node):
         self.declare_parameter("initial_y", 0.00)
         self.declare_parameter("initial_z", 0.20)
 
-        self.declare_parameter("workspace_x_min", -0.700)
-        self.declare_parameter("workspace_x_max", 0.770)
-        self.declare_parameter("workspace_y_min", -0.760)
-        self.declare_parameter("workspace_y_max", 0.760)
+        self.declare_parameter("workspace_x_min", 0.150)
+        self.declare_parameter("workspace_x_max", 0.450)
+        self.declare_parameter("workspace_y_min", -0.250)
+        self.declare_parameter("workspace_y_max", 0.250)
         self.declare_parameter("workspace_z_min", 0.020)
-        self.declare_parameter("workspace_z_max", 0.650)
+        self.declare_parameter("workspace_z_max", 0.450)
+        self.declare_parameter("enable_local_teleop_window", True)
+        self.declare_parameter("enable_base_joint_jog", True)
+        self.declare_parameter("local_window_x_min_m", -0.12)
+        self.declare_parameter("local_window_x_max_m", 0.18)
+        self.declare_parameter("local_window_y_min_m", -0.25)
+        self.declare_parameter("local_window_y_max_m", 0.25)
+        self.declare_parameter("local_window_z_min_m", -0.25)
+        self.declare_parameter("local_window_z_max_m", 0.18)
+        self.declare_parameter("global_z_min_m", 0.020)
+        self.declare_parameter("global_z_max_m", 0.450)
+        self.declare_parameter("base_joint_jog_speed_rad_s", 0.5)
 
         self.declare_parameter("urdf_path", "")
         self.declare_parameter("ee_frame", "end_link")
@@ -100,8 +123,8 @@ class CartesianJogCore(Node):
         self.declare_parameter("cartesian_joint1_window_warning_rad", 0.25)
         self.declare_parameter("cartesian_joint1_window_hard_rad", 1.20)
         self.declare_parameter("cartesian_joint1_window_rad", 0.25)
-        self.declare_parameter("enable_joint1_anchor_hard_gate", False)
-        self.declare_parameter("enable_joint1_global_operational_cap", False)
+        self.declare_parameter("enable_joint1_anchor_hard_gate", True)
+        self.declare_parameter("enable_joint1_global_operational_cap", True)
         self.declare_parameter("joint1_global_operational_min_rad", -1.60)
         self.declare_parameter("joint1_global_operational_max_rad", 1.60)
         self.declare_parameter("joint1_large_delta_from_anchor_rad", 0.15)
@@ -128,6 +151,25 @@ class CartesianJogCore(Node):
             z_min=float(self.get_parameter("workspace_z_min").value),
             z_max=float(self.get_parameter("workspace_z_max").value),
         )
+        self._enable_local_teleop_window = bool(
+            self.get_parameter("enable_local_teleop_window").value
+        )
+        self._enable_base_joint_jog = bool(self.get_parameter("enable_base_joint_jog").value)
+        self._base_joint_jog_speed_rad_s = float(
+            self.get_parameter("base_joint_jog_speed_rad_s").value
+        )
+        self._local_window_limits = LocalWindowLimits(
+            x_min=float(self.get_parameter("local_window_x_min_m").value),
+            x_max=float(self.get_parameter("local_window_x_max_m").value),
+            y_min=float(self.get_parameter("local_window_y_min_m").value),
+            y_max=float(self.get_parameter("local_window_y_max_m").value),
+            z_min=float(self.get_parameter("local_window_z_min_m").value),
+            z_max=float(self.get_parameter("local_window_z_max_m").value),
+            global_z_min=float(self.get_parameter("global_z_min_m").value),
+            global_z_max=float(self.get_parameter("global_z_max_m").value),
+        )
+        self._teleop_mode = "cartesian"
+        self._last_base_jog_result: BaseJogResult | None = None
 
         urdf_path = str(self.get_parameter("urdf_path").value)
         ee_frame = str(self.get_parameter("ee_frame").value)
@@ -266,6 +308,16 @@ class CartesianJogCore(Node):
         self._base_anchor_q = (
             float(self._q_sim[self._joint1_idx]) if self._joint1_idx is not None else 0.0
         )
+        self._local_window_state = LocalWindowState(
+            base_anchor_q=self._base_anchor_q,
+            anchor_position=(
+                self.committed_target_x,
+                self.committed_target_y,
+                self.committed_target_z,
+            ),
+            local_offset=(0.0, 0.0, 0.0),
+        )
+        self._reanchor_local_window_from_q_sim()
 
         self._publish_fake_joint_states = bool(
             self.get_parameter("publish_fake_joint_states").value
@@ -372,15 +424,112 @@ class CartesianJogCore(Node):
             return
         self._maybe_log_ik_rejection(format_joint_near_limit_log(info), now_ns)
 
-    def _maybe_update_base_anchor_on_deadman_rising(self, deadman_pressed: bool) -> None:
-        if self._joint1_idx is None:
-            self._prev_deadman_pressed = deadman_pressed
+    def _reanchor_local_window_from_q_sim(self) -> None:
+        pose, rotation, err = self._pose_from_q_sim()
+        if err or pose is None or rotation is None:
             return
-        self._base_anchor_q, self._prev_deadman_pressed = update_base_anchor_q_on_deadman_rising(
-            deadman_pressed=deadman_pressed,
-            prev_deadman_pressed=self._prev_deadman_pressed,
-            joint1_q=float(self._q_sim[self._joint1_idx]),
+        j1_q = (
+            float(self._q_sim[self._joint1_idx])
+            if self._joint1_idx is not None
+            else 0.0
+        )
+        pos = pos3_from_pose(pose)
+        self._local_window_state = reanchor_local_window_from_fk(
+            fk_position=pos,
+            joint1_q=j1_q,
+        )
+        self._base_anchor_q = self._local_window_state.base_anchor_q
+        (
+            self.committed_target_x,
+            self.committed_target_y,
+            self.committed_target_z,
+            self._committed_rotation,
+            _,
+            fk_err,
+        ) = resync_committed_from_q_sim(self._fk, self._q_sim)
+        if fk_err:
+            self._fk_tick_error = fk_err
+
+    def _maybe_reanchor_on_deadman_rising(self, deadman_pressed: bool) -> None:
+        if deadman_pressed and not self._prev_deadman_pressed:
+            self._reanchor_local_window_from_q_sim()
+        self._prev_deadman_pressed = deadman_pressed
+
+    def _local_window_limits_view(self) -> LocalWindowLimitsView:
+        lim = self._local_window_limits
+        return LocalWindowLimitsView(
+            x_min=lim.x_min,
+            x_max=lim.x_max,
+            y_min=lim.y_min,
+            y_max=lim.y_max,
+            z_min=lim.z_min,
+            z_max=lim.z_max,
+            global_z_min=lim.global_z_min,
+            global_z_max=lim.global_z_max,
+        )
+
+    def _build_local_window_diagnostics(
+        self,
+        *,
+        target_before_ik: tuple[float, float, float],
+        clamp_active: bool,
+        clamped_axes: tuple[str, ...],
+        joint1_candidate_q: float | None,
+        cartesian_skipped: bool,
+        base_jog_result: BaseJogResult | None,
+    ) -> LocalWindowDiagnostics:
+        cmd = self.latest_cmd
+        j1_cur = (
+            float(self._q_sim[self._joint1_idx])
+            if self._joint1_idx is not None
+            else 0.0
+        )
+        j1_cand = float(joint1_candidate_q) if joint1_candidate_q is not None else j1_cur
+        anchor = self._local_window_state.anchor_position
+        offset = self._local_window_state.local_offset
+        target = target_before_ik
+        frame_kind = (
+            cmd.command_frame_kind
+            if cmd is not None and cmd.command_frame_kind
+            else COMMAND_FRAME_LOCAL_WINDOW
+        )
+        hard_rad = self._ik_quality_log_config.cartesian_joint1_window_hard_rad
+        cap_min = self._ik_quality_log_config.joint1_global_operational_min_rad
+        cap_max = self._ik_quality_log_config.joint1_global_operational_max_rad
+        delta = j1_cand - self._base_anchor_q
+        return LocalWindowDiagnostics(
+            teleop_mode=self._teleop_mode,
+            command_frame_kind=frame_kind,
+            base_jog_active=bool(cmd.base_jog_active) if cmd is not None else False,
+            base_jog_delta_rad=(
+                base_jog_result.delta_rad if base_jog_result is not None else 0.0
+            ),
+            base_jog_before_q=(
+                base_jog_result.before_q if base_jog_result is not None else j1_cur
+            ),
+            base_jog_after_q=(
+                base_jog_result.after_q if base_jog_result is not None else j1_cur
+            ),
+            cartesian_mode_skipped_due_to_base_jog=cartesian_skipped,
             base_anchor_q=self._base_anchor_q,
+            local_window_anchor_position=anchor,
+            local_target_offset=offset,
+            local_window_limits=self._local_window_limits_view(),
+            local_window_clamp_active=clamp_active,
+            local_window_clamped_axes=clamped_axes,
+            target_base_link_from_local_window=target,
+            target_base_link_before_ik=target_before_ik,
+            joint1_current_q=j1_cur,
+            joint1_candidate_q=j1_cand,
+            joint1_delta_from_anchor=delta,
+            joint1_would_violate_global_cap=(
+                j1_cand < cap_min or j1_cand > cap_max
+            ),
+            joint1_global_cap_error_rad=_global_cap_error_rad(
+                j1_cand, min_rad=cap_min, max_rad=cap_max
+            ),
+            joint1_would_violate_hard_window=abs(delta) > hard_rad,
+            joint1_hard_window_error_rad=_window_error_rad(abs(delta), hard_rad),
         )
 
     def _build_base_sector_diagnostics(
@@ -460,6 +609,7 @@ class CartesianJogCore(Node):
         workspace_clamp_active: bool = False,
         workspace_clamped_axes: tuple[str, ...] = (),
         accepted_fk_position: tuple[float, float, float] | None = None,
+        local_window: LocalWindowDiagnostics | None = None,
     ) -> None:
         if not self._joint_names:
             return
@@ -551,6 +701,7 @@ class CartesianJogCore(Node):
             format_ik_quality_diagnostics(
                 diag,
                 base_sector=base_sector,
+                local_window=local_window,
             )
         )
 
@@ -628,10 +779,11 @@ class CartesianJogCore(Node):
             and not self.latest_cmd.soft_stop
             and state_name == "ACTIVE"
         )
-        self._maybe_update_base_anchor_on_deadman_rising(deadman_pressed)
+        self._maybe_reanchor_on_deadman_rising(deadman_pressed)
 
         current_pose, sim_rotation, fk_error = self._pose_from_q_sim()
         q_current_list = [float(v) for v in self._q_sim]
+        q_before_ik = np.asarray(self._q_sim, dtype=np.float64).copy()
 
         sim_x = self.committed_target_x
         sim_y = self.committed_target_y
@@ -641,13 +793,106 @@ class CartesianJogCore(Node):
             sim_y = float(current_pose.position.y)
             sim_z = float(current_pose.position.z)
 
+        fk_position_before = (
+            pos3_from_pose(current_pose) if current_pose is not None else (sim_x, sim_y, sim_z)
+        )
+
         candidate_x = sim_x
         candidate_y = sim_y
         candidate_z = sim_z
         raw_candidate_x = sim_x
         raw_candidate_y = sim_y
         raw_candidate_z = sim_z
-        if state_name == "ACTIVE" and self.latest_cmd is not None:
+        workspace_clamp_active = False
+        workspace_clamped_axes: tuple[str, ...] = ()
+        local_clamp_active = False
+        local_clamped_axes: tuple[str, ...] = ()
+        base_jog_result: BaseJogResult | None = None
+        cartesian_skipped = False
+        run_ik = False
+
+        base_jog_active = (
+            state_name == "ACTIVE"
+            and self.latest_cmd is not None
+            and self._enable_base_joint_jog
+            and bool(self.latest_cmd.base_jog_active)
+            and self._joint1_idx is not None
+        )
+
+        if base_jog_active:
+            self._teleop_mode = "base_jog"
+            cartesian_skipped = True
+            base_jog_result = apply_base_joint1_jog(
+                self._q_sim,
+                joint1_index=self._joint1_idx,
+                velocity_rad_s=float(self.latest_cmd.joint1_jog_velocity_rad_s),
+                dt=dt,
+                min_rad=self._joint1_global_cap_config.min_rad,
+                max_rad=self._joint1_global_cap_config.max_rad,
+            )
+            self._last_base_jog_result = base_jog_result
+            self._q_sim = np.asarray(base_jog_result.q_after, dtype=np.float64)
+            self._reanchor_local_window_from_q_sim()
+            self._last_valid_fake_q = [float(v) for v in self._q_sim]
+            q_current_list = [float(v) for v in self._q_sim]
+            current_pose, sim_rotation, fk_err2 = self._pose_from_q_sim()
+            if fk_err2:
+                self._fk_tick_error = fk_err2
+            if current_pose is not None:
+                sim_x = float(current_pose.position.x)
+                sim_y = float(current_pose.position.y)
+                sim_z = float(current_pose.position.z)
+                fk_position_before = pos3_from_pose(current_pose)
+            candidate_x = sim_x
+            candidate_y = sim_y
+            candidate_z = sim_z
+            raw_candidate_x = sim_x
+            raw_candidate_y = sim_y
+            raw_candidate_z = sim_z
+            self.last_clamp_reason = ""
+
+        elif (
+            state_name == "ACTIVE"
+            and deadman_pressed
+            and self.latest_cmd is not None
+            and self._enable_local_teleop_window
+        ):
+            self._teleop_mode = "cartesian"
+            v_local = (
+                float(self.latest_cmd.linear.x),
+                float(self.latest_cmd.linear.y),
+                float(self.latest_cmd.linear.z),
+            )
+            uncapped_offset = integrate_local_target_offset(
+                self._local_window_state.local_offset,
+                v_local,
+                dt,
+            )
+            anchor = self._local_window_state.anchor_position
+            base_q = self._local_window_state.base_anchor_q
+            forward, lateral = compute_local_axes(base_q)
+            raw_candidate_x = (
+                anchor[0] + forward[0] * uncapped_offset[0] + lateral[0] * uncapped_offset[1]
+            )
+            raw_candidate_y = (
+                anchor[1] + forward[1] * uncapped_offset[0] + lateral[1] * uncapped_offset[1]
+            )
+            raw_candidate_z = anchor[2] + uncapped_offset[2]
+
+            self._local_window_state, clamp_result = integrate_local_window_candidate(
+                self._local_window_state,
+                v_local,
+                dt,
+                self._local_window_limits,
+            )
+            candidate_x, candidate_y, candidate_z = clamp_result.target_base_link
+            local_clamp_active = clamp_result.clamp_active
+            local_clamped_axes = clamp_result.clamped_axes
+            self.last_clamp_reason = ",".join(local_clamped_axes) if local_clamp_active else ""
+            run_ik = current_pose is not None and sim_rotation is not None
+
+        elif state_name == "ACTIVE" and self.latest_cmd is not None:
+            self._teleop_mode = "cartesian"
             raw_candidate_x = sim_x + float(self.latest_cmd.linear.x) * dt
             raw_candidate_y = sim_y + float(self.latest_cmd.linear.y) * dt
             raw_candidate_z = sim_z + float(self.latest_cmd.linear.z) * dt
@@ -661,26 +906,21 @@ class CartesianJogCore(Node):
                     self._workspace,
                 )
             )
-
-        workspace_clamp_active = bool(self.last_clamp_reason)
-        workspace_clamped_axes = tuple(
-            part for part in self.last_clamp_reason.split(",") if part
-        )
+            workspace_clamp_active = bool(self.last_clamp_reason)
+            workspace_clamped_axes = tuple(
+                part for part in self.last_clamp_reason.split(",") if part
+            )
+            run_ik = current_pose is not None and sim_rotation is not None
+        else:
+            self._teleop_mode = "hold"
+            self.last_clamp_reason = ""
 
         q_target: list[float] = []
         ik_success = False
         ik_reason = ""
         ik_failure_diag = None
-        q_before_ik = np.asarray(self._q_sim, dtype=np.float64).copy()
-        fk_position_before = (
-            pos3_from_pose(current_pose) if current_pose is not None else (sim_x, sim_y, sim_z)
-        )
 
-        if (
-            state_name == "ACTIVE"
-            and current_pose is not None
-            and sim_rotation is not None
-        ):
+        if run_ik and not base_jog_active:
             q_target, ik_success, ik_reason, ik_failure_diag = solve_target_ik(
                 fk_ctx=self._fk,
                 state_name=state_name,
@@ -921,6 +1161,20 @@ class CartesianJogCore(Node):
                 if fk_target_pose is not None and not fk_target_err
                 else fk_position_before
             )
+            local_diag = None
+            if self._enable_local_teleop_window:
+                local_diag = self._build_local_window_diagnostics(
+                    target_before_ik=(candidate_x, candidate_y, candidate_z),
+                    clamp_active=local_clamp_active,
+                    clamped_axes=local_clamped_axes,
+                    joint1_candidate_q=(
+                        float(q_target_arr[self._joint1_idx])
+                        if self._joint1_idx is not None
+                        else None
+                    ),
+                    cartesian_skipped=cartesian_skipped,
+                    base_jog_result=base_jog_result,
+                )
             self._maybe_log_ik_quality(
                 q_before=q_before_ik,
                 q_target=q_target_arr,
@@ -943,6 +1197,7 @@ class CartesianJogCore(Node):
                 workspace_clamp_active=workspace_clamp_active,
                 workspace_clamped_axes=workspace_clamped_axes,
                 accepted_fk_position=fk_position_target,
+                local_window=local_diag,
                 resolve_ik_error=lambda: self._resolve_ik_error_for_log(
                     ik_failure=False,
                     ik_failure_diag=None,
@@ -974,6 +1229,11 @@ class CartesianJogCore(Node):
             q_current_list = [float(v) for v in self._q_sim]
             self._last_valid_fake_q = q_current_list
             q_target = q_current_list
+
+        if base_jog_active:
+            q_target = q_current_list
+            ik_success = False
+            ik_reason = "BASE_JOG"
 
         committed_target_pose = build_committed_target_pose(
             self.committed_target_x,

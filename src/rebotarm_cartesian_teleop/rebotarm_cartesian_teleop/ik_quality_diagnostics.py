@@ -635,6 +635,7 @@ def format_ik_quality_diagnostics(
     diag: IkQualityDiagnostics,
     *,
     base_sector: BaseSectorDiagnostics | None = None,
+    local_window: LocalWindowDiagnostics | None = None,
 ) -> str:
     lines = ["IK quality diagnostics:"]
     if diag.log_reasons:
@@ -685,9 +686,116 @@ def format_ik_quality_diagnostics(
             f"nearest={joint.nearest_margin:.4f} ({joint.nearest_side})"
         )
     text = "\n".join(lines)
+    if local_window is not None:
+        text = f"{text}\n{format_local_window_diagnostics(local_window)}"
     if base_sector is not None:
         text = f"{text}\n{format_base_sector_diagnostics(base_sector)}"
     return text
+
+
+@dataclass(frozen=True)
+class LocalWindowDiagnostics:
+    teleop_mode: str
+    command_frame_kind: str
+    base_jog_active: bool
+    base_jog_delta_rad: float
+    base_jog_before_q: float
+    base_jog_after_q: float
+    cartesian_mode_skipped_due_to_base_jog: bool
+    base_anchor_q: float
+    local_window_anchor_position: tuple[float, float, float]
+    local_target_offset: tuple[float, float, float]
+    local_window_limits: LocalWindowLimitsView
+    local_window_clamp_active: bool
+    local_window_clamped_axes: tuple[str, ...]
+    target_base_link_from_local_window: tuple[float, float, float]
+    target_base_link_before_ik: tuple[float, float, float]
+    joint1_current_q: float
+    joint1_candidate_q: float
+    joint1_delta_from_anchor: float
+    joint1_would_violate_global_cap: bool
+    joint1_global_cap_error_rad: float
+    joint1_would_violate_hard_window: bool
+    joint1_hard_window_error_rad: float
+
+
+@dataclass(frozen=True)
+class LocalWindowLimitsView:
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    z_min: float
+    z_max: float
+    global_z_min: float
+    global_z_max: float
+
+
+def format_local_window_diagnostics(local: LocalWindowDiagnostics) -> str:
+    lim = local.local_window_limits
+    axes = (
+        ",".join(local.local_window_clamped_axes)
+        if local.local_window_clamped_axes
+        else "(none)"
+    )
+    anchor = local.local_window_anchor_position
+    offset = local.local_target_offset
+    target = local.target_base_link_from_local_window
+    return "\n".join(
+        [
+            "Local/window diagnostics:",
+            f"  teleop_mode={local.teleop_mode}",
+            f"  command_frame_kind={local.command_frame_kind}",
+            f"  base_jog_active={local.base_jog_active}",
+            f"  base_jog_delta_rad={local.base_jog_delta_rad:+.4f}",
+            f"  base_jog_before_q={local.base_jog_before_q:.4f}",
+            f"  base_jog_after_q={local.base_jog_after_q:.4f}",
+            (
+                "  cartesian_mode_skipped_due_to_base_jog="
+                f"{local.cartesian_mode_skipped_due_to_base_jog}"
+            ),
+            f"  base_anchor_q={local.base_anchor_q:.4f}",
+            (
+                "  local_window_anchor_position="
+                f"({anchor[0]:.4f}, {anchor[1]:.4f}, {anchor[2]:.4f})"
+            ),
+            (
+                "  local_target_offset="
+                f"({offset[0]:.4f}, {offset[1]:.4f}, {offset[2]:.4f})"
+            ),
+            (
+                "  local_window_limits="
+                f"x=[{lim.x_min:.2f},{lim.x_max:.2f}] "
+                f"y=[{lim.y_min:.2f},{lim.y_max:.2f}] "
+                f"z=[{lim.z_min:.2f},{lim.z_max:.2f}] "
+                f"global_z=[{lim.global_z_min:.2f},{lim.global_z_max:.2f}]"
+            ),
+            f"  local_window_clamp_active={local.local_window_clamp_active} axes={axes}",
+            (
+                "  target_base_link_from_local_window="
+                f"({target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f})"
+            ),
+            (
+                "  target_base_link_before_ik="
+                f"({local.target_base_link_before_ik[0]:.4f}, "
+                f"{local.target_base_link_before_ik[1]:.4f}, "
+                f"{local.target_base_link_before_ik[2]:.4f})"
+            ),
+            f"  joint1_current_q={local.joint1_current_q:.4f}",
+            f"  joint1_candidate_q={local.joint1_candidate_q:.4f}",
+            f"  joint1_delta_from_anchor={local.joint1_delta_from_anchor:+.4f}",
+            (
+                "  joint1_global_cap: "
+                f"would_violate={local.joint1_would_violate_global_cap} "
+                f"error_rad={local.joint1_global_cap_error_rad:.4f}"
+            ),
+            (
+                "  joint1_hard_window: "
+                f"would_violate={local.joint1_would_violate_hard_window} "
+                f"error_rad={local.joint1_hard_window_error_rad:.4f}"
+            ),
+        ]
+    )
 
 
 def pos3_from_pose(pose) -> tuple[float, float, float]:

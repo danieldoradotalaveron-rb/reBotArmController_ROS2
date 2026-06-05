@@ -5,3 +5,6 @@ bool deadman
 bool soft_stop
 float64 speed_scale
 bool enable_orientation
+bool base_jog_active
+float32 joint1_jog_velocity_rad_s
+string command_frame_kind

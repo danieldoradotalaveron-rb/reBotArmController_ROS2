@@ -76,6 +76,9 @@ def make_cmd(
     linear_x: float = 0.0,
     linear_y: float = 0.0,
     linear_z: float = 0.0,
+    base_jog_active: bool = False,
+    joint1_jog_velocity_rad_s: float = 0.0,
+    command_frame_kind: str = "local_window_frame",
 ) -> CartesianJogCmd:
     msg = CartesianJogCmd()
     msg.deadman = deadman
@@ -83,6 +86,9 @@ def make_cmd(
     msg.linear.x = linear_x
     msg.linear.y = linear_y
     msg.linear.z = linear_z
+    msg.base_jog_active = base_jog_active
+    msg.joint1_jog_velocity_rad_s = float(joint1_jog_velocity_rad_s)
+    msg.command_frame_kind = command_frame_kind
     return msg
 
 
