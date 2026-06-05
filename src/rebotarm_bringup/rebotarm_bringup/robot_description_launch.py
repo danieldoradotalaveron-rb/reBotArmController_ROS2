@@ -18,8 +18,8 @@ def d405_launch_arguments() -> list[DeclareLaunchArgument]:
     """Declare the standard D405 launch arguments (defaults match the xacro)."""
     return [
         DeclareLaunchArgument("enable_d405", default_value="true"),
-        DeclareLaunchArgument("d405_mount_xyz", default_value="0.05 0.0 0.03"),
-        DeclareLaunchArgument("d405_mount_rpy", default_value="0 0 0"),
+        DeclareLaunchArgument("d405_mount_xyz", default_value="-0.09 0.0 0.07"),
+        DeclareLaunchArgument("d405_mount_rpy", default_value="0 0.5 0"),
         DeclareLaunchArgument("d405_camera_body_xyz", default_value="0 0 0"),
         DeclareLaunchArgument("d405_camera_body_rpy", default_value="0 0 0"),
     ]
