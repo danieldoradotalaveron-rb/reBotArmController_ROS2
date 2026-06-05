@@ -20,7 +20,7 @@ joy_cartesian_mapper:
     speed_boost_button: 5
 
     speed_scale_default: 1.0
-    speed_scale_boost: 1.5
+    speed_scale_boost: 2.5
 
     enable_velocity_smoothing: true
     max_linear_accel_m_s2: 0.25
