@@ -27,13 +27,11 @@ runs:
         sudo rosdep init || true
         rosdep update
 
-    - name: Fetch vendored SDK (not in git)
+    - name: Verify SDK submodule
       shell: bash
       run: |
-        mkdir -p third_party
-        git clone --depth 1 \
-          https://github.com/vectorBH6/reBotArm_control_py.git \
-          third_party/reBotArm_control_py
+        test -d third_party/reBotArm_control_py/reBotArm_control_py || \
+          { echo "Missing SDK submodule — run: git submodule update --init third_party/reBotArm_control_py"; exit 1; }
 
     - name: Install ROS dependencies
       shell: bash

@@ -15,7 +15,9 @@ just build-all
 
 Submodules: [`rebotarm_monitor_ros2`](rebotarm_monitor_ros2/),
 [`rebotarm_cartesian_gamepad_teleop_ros2`](rebotarm_cartesian_gamepad_teleop_ros2/)
-(gamepad teleop overlay, [repo](https://github.com/danieldoradotalaveron-rb/rebotarm_cartesian_gamepad_teleop_ros2)).
+(gamepad teleop overlay, [repo](https://github.com/danieldoradotalaveron-rb/rebotarm_cartesian_gamepad_teleop_ros2)),
+[`third_party/reBotArm_control_py`](third_party/reBotArm_control_py/)
+(Python SDK, [repo](https://github.com/dorado-ai-devops/reBotArm_control_py), branch `main`).
 
 For Cartesian teleop (simulation / RViz only), also install the joy driver:
 

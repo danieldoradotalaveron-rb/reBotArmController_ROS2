@@ -16,6 +16,8 @@ on:
       - "integration/**"
       - "rebotarm_monitor_ros2/**"
       - "rebotarm_cartesian_gamepad_teleop_ros2/**"
+      - "third_party/**"
+      - ".gitmodules"
       - ".github/workflows/integration.yml"
       - ".github/actions/setup-overlay-workspace/**"
   pull_request:
@@ -24,6 +26,8 @@ on:
       - "integration/**"
       - "rebotarm_monitor_ros2/**"
       - "rebotarm_cartesian_gamepad_teleop_ros2/**"
+      - "third_party/**"
+      - ".gitmodules"
       - ".github/workflows/integration.yml"
       - ".github/actions/setup-overlay-workspace/**"
 
