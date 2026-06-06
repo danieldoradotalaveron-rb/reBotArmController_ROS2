@@ -1,10 +1,10 @@
-"""Second RViz window: gripper-following view (eye-in-hand style).
+"""Second RViz window: ThirdPersonFollower on end_link (Fixed Frame base_link).
 
-Requires the teleop stack + cartesian_teleop_validation_rviz.launch.py (or equivalent)
-already publishing TF, robot_description, and teleop markers.
+Requires TF and teleop markers from cartesian_teleop_validation_rviz.launch.py
+(or another robot_state_publisher on /rebotarm/fake_joint_states).
 
-  just run-teleop-validation-rviz   # window 1: base_link validation view
-  just run-teleop-gripper-rviz      # window 2: GripperFollowD405 (87°×58° FOV, 7 cm near clip)
+  just run-teleop-validation-rviz   # window 1: TeleopBaseValidation
+  just run-teleop-gripper-rviz      # window 2: GripperFollowD405 (Target Frame end_link)
 """
 
 from launch.substitutions import PathJoinSubstitution

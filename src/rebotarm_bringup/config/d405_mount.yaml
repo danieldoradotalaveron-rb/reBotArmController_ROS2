@@ -1,17 +1,12 @@
-# RealSense D405 eye-in-hand mount — RIGID TF placeholder (NOT calibrated).
-#
-# These values feed the xacro args of reBot-DevArm_fixend.xacro
-# (d405_mount_xyz / d405_mount_rpy / d405_camera_body_*).
-# Measure the real bracket pose and update mount_xyz / mount_rpy, then relaunch.
-#
-# This is TF/visual modeling only. It is NOT hand-eye calibration and NOT
-# camera intrinsics. See description/D405_EYE_IN_HAND.md.
+# D405 eye-in-hand mount reference (not loaded by launch files).
+# Runtime mount args: rebotarm_bringup/robot_description_launch.py
+# TF chain and validation: docs/D405_EYE_IN_HAND.md
 
 d405_eye_in_hand:
   enable: true
   parent_link: end_link
-  mount_xyz: [0.05, 0.0, 0.03]      # placeholder — measure bracket offset
-  mount_rpy: [0.0, 0.0, 0.0]        # placeholder — measure bracket orientation
+  mount_xyz: [0.05, 0.0, 0.03]
+  mount_rpy: [0.0, 0.0, 0.0]
   camera_body_xyz: [0.0, 0.0, 0.0]
   camera_body_rpy: [0.0, 0.0, 0.0]
   calibrated: false

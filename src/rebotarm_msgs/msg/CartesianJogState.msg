@@ -3,6 +3,7 @@ string state
 geometry_msgs/Pose current_pose
 geometry_msgs/Pose target_pose
 geometry_msgs/Twist commanded_twist
+# Six arm joints in order joint1..joint6 (radians).
 float64[] q_current
 float64[] q_target
 bool ik_success
