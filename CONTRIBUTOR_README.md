@@ -13,6 +13,10 @@ sudo apt install just
 just build-all
 ```
 
+Submodules: [`rebotarm_monitor_ros2`](rebotarm_monitor_ros2/),
+[`rebotarm_cartesian_gamepad_teleop_ros2`](rebotarm_cartesian_gamepad_teleop_ros2/)
+(gamepad teleop overlay, [repo](https://github.com/danieldoradotalaveron-rb/rebotarm_cartesian_gamepad_teleop_ros2)).
+
 For Cartesian teleop (simulation / RViz only), also install the joy driver:
 
 ```bash
@@ -81,7 +85,7 @@ ros2 run tf2_ros tf2_echo end_link d405_color_optical_frame
 | `/rebotarm/cartesian_jog_state` | `cartesian_jog_core` | Pose, IK state, `q_target` |
 | `/rebotarm/fake_joint_states` | `cartesian_jog_core` | Sim joint states for RSP |
 
-Config: `src/rebotarm_cartesian_teleop/config/cartesian_teleop.yaml`.
+Config: `rebotarm_cartesian_gamepad_teleop_ros2/src/rebotarm_cartesian_teleop/config/cartesian_teleop.yaml`.
 Rationale and launch matrix: [`FORK_CHANGES.md`](FORK_CHANGES.md) §5–§6.
 
 Full list: `build-driver`, `build-monitor`, `build-teleop`, `build-all`,
@@ -89,18 +93,11 @@ Full list: `build-driver`, `build-monitor`, `build-teleop`, `build-all`,
 `run-joy`, `run-joy-mapper`, `run-cartesian-core`,
 `run-teleop-validation-rviz`, `run-teleop-gripper-rviz`,
 `run-teleop-sim-rviz`, `svc-park`, `svc-enable`, `svc-disable`,
-`svc-gravity-start`, `svc-gravity-stop`, `test-monitor`.
+`svc-gravity-start`, `svc-gravity-stop`, `test-monitor`, `test-teleop`.
 
 Rebuild teleop only after edits:
 
 ```bash
 just build-teleop
-```
-
-Run teleop tests:
-
-```bash
-source /opt/ros/jazzy/setup.bash && source install/setup.bash
-colcon test --packages-select rebotarm_cartesian_teleop rebotarm_msgs
-colcon test-result --verbose
+just test-teleop
 ```

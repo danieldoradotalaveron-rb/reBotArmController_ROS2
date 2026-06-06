@@ -20,9 +20,11 @@
 
 root        := justfile_directory()
 monitor_ws  := root + "/rebotarm_monitor_ros2"
+teleop_ws   := root + "/rebotarm_cartesian_gamepad_teleop_ros2"
 ros_setup   := "/opt/ros/jazzy/setup.bash"
 src_driver  := "source " + ros_setup + " && source " + root + "/install/setup.bash"
 src_monitor := src_driver + " && source " + monitor_ws + "/install/setup.bash"
+src_teleop  := src_driver + " && source " + teleop_ws + "/install/setup.bash"
 
 default_device := "/dev/ttyACM0"
 
@@ -31,22 +33,23 @@ default:
 
 # --- Build -------------------------------------------------------------------
 
-# Builds all packages under src/ (msgs, controller, bringup, cartesian_teleop, …).
+# Builds driver packages under src/ (msgs, controller, bringup).
 build-driver:
     bash -c 'export PATH=/usr/bin:$PATH && source {{ros_setup}} && cd {{root}} && colcon build --symlink-install --base-paths src'
 
 build-monitor:
     bash -c 'export PATH=/usr/bin:$PATH && source {{ros_setup}} && cd {{monitor_ws}} && colcon build --symlink-install --base-paths src'
 
-# Rebuild only teleop after edits (msgs already built by build-driver).
+# Rebuild teleop overlay (requires build-driver first for rebotarm_msgs / bringup).
 build-teleop:
-    bash -c 'export PATH=/usr/bin:$PATH && source {{ros_setup}} && cd {{root}} && colcon build --symlink-install --packages-select rebotarm_cartesian_teleop'
+    bash -c 'export PATH=/usr/bin:$PATH && {{src_driver}} && cd {{teleop_ws}} && colcon build --symlink-install --base-paths src'
 
-build-all: build-driver build-monitor
+build-all: build-driver build-monitor build-teleop
 
 clean:
     rm -rf {{root}}/build {{root}}/install {{root}}/log
     rm -rf {{monitor_ws}}/build {{monitor_ws}}/install {{monitor_ws}}/log
+    rm -rf {{teleop_ws}}/build {{teleop_ws}}/install {{teleop_ws}}/log
 
 # --- Run (one terminal each) -------------------------------------------------
 
@@ -75,22 +78,22 @@ run-gravity:
 teleop_params := '$(ros2 pkg prefix rebotarm_cartesian_teleop)/share/rebotarm_cartesian_teleop/config/cartesian_teleop.yaml'
 
 run-joy:
-    bash -c '{{src_driver}} && ros2 run joy joy_node'
+    bash -c '{{src_teleop}} && ros2 run joy joy_node'
 
 run-joy-mapper:
-    bash -c '{{src_driver}} && ros2 run rebotarm_cartesian_teleop joy_cartesian_mapper --ros-args --params-file {{teleop_params}}'
+    bash -c '{{src_teleop}} && ros2 run rebotarm_cartesian_teleop joy_cartesian_mapper --ros-args --params-file {{teleop_params}}'
 
 run-cartesian-core:
-    bash -c '{{src_driver}} && ros2 run rebotarm_cartesian_teleop cartesian_jog_core --ros-args --params-file {{teleop_params}}'
+    bash -c '{{src_teleop}} && ros2 run rebotarm_cartesian_teleop cartesian_jog_core --ros-args --params-file {{teleop_params}}'
 
 run-teleop-sim-rviz:
-    bash -c '{{src_driver}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_sim_rviz.launch.py'
+    bash -c '{{src_teleop}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_sim_rviz.launch.py'
 
 run-teleop-validation-rviz:
-    bash -c '{{src_driver}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_validation_rviz.launch.py'
+    bash -c '{{src_teleop}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_validation_rviz.launch.py'
 
 run-teleop-gripper-rviz:
-    bash -c '{{src_driver}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_gripper_rviz.launch.py'
+    bash -c '{{src_teleop}} && ros2 launch rebotarm_cartesian_teleop cartesian_teleop_gripper_rviz.launch.py'
 
 # --- Services ----------------------------------------------------------------
 
@@ -113,3 +116,6 @@ svc-gravity-stop:
 
 test-monitor:
     bash -c '{{src_driver}} && cd {{monitor_ws}} && colcon test --packages-select rebotarm_monitor && colcon test-result --verbose'
+
+test-teleop:
+    bash -c '{{src_driver}} && cd {{teleop_ws}} && colcon test --packages-select rebotarm_cartesian_teleop && colcon test-result --verbose'

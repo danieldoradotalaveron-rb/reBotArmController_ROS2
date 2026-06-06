@@ -1,8 +1,0 @@
-.venv/
-.ruff_cache/
-uv.lock
-__pycache__/
-*.pyc
-
-# Local investigation / offline validation scripts (not part of the ROS package)
-scripts/

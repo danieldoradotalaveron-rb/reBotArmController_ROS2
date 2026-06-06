@@ -1,3 +1,6 @@
 [submodule "rebotarm_monitor_ros2"]
 	path = rebotarm_monitor_ros2
 	url = https://github.com/danieldoradotalaveron-rb/rebotarm_monitor_ros2.git
+[submodule "rebotarm_cartesian_gamepad_teleop_ros2"]
+	path = rebotarm_cartesian_gamepad_teleop_ros2
+	url = https://github.com/danieldoradotalaveron-rb/rebotarm_cartesian_gamepad_teleop_ros2.git

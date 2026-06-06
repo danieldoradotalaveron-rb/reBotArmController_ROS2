@@ -10,7 +10,7 @@ What this fork adds on top of upstream
 | 2 | Smooth gravity-comp stop | Leaving gravity compensation (MIT + tau_g) by snapping to pos_vel causes a clack. A 12-step MIT ramp fades the feedforward torque to zero and stiffens kp before the mode switch. |
 | 3 | Passive monitor | Upstream has no monitoring/observability. An overlay (`rebotarm_monitor`) publishes `/diagnostics` from topics + host metrics, with no driver coupling. |
 | 4 | Dev tooling | `justfile` + `pyproject.toml` so build/run/services are one command and the source order is correct. |
-| 5 | Cartesian teleop (sim) | Upstream has no gamepad Cartesian jog path for simulation and RViz validation before sending hardware commands. |
+| 5 | Cartesian teleop (sim, WIP) | Dry-run gamepad Cartesian jog for RViz validation; hardware and Isaac Sim planned. |
 | 6 | D405 eye-in-hand TF | Rigid camera frames under `end_link` for RViz/TF inspection without a RealSense driver or hand-eye calibration. |
 
 ---
@@ -97,6 +97,18 @@ terminal per long-running process; Ctrl+C cleans up. See
 
 ## 5. Cartesian gamepad teleop (simulation-first)
 
+> **⚠️ Work in progress — simulation / RViz only.** Default is **`dry_run`**
+> (gamepad → IK → fake joint states → RViz). **Does not command the real arm
+> today.** Overlay repo:
+> [`rebotarm_cartesian_gamepad_teleop_ros2`](https://github.com/danieldoradotalaveron-rb/rebotarm_cartesian_gamepad_teleop_ros2).
+
+| Now | Planned |
+|-----|---------|
+| RViz validation, local-window jog, joint1 base jog | Hardware bring-up, safety bridge, tuning |
+| Dry-run only | Isaac Sim — when Seeed URDF is sim-ready |
+
+**Roadmap:** hardware tests and refining. **Contributions welcome.**
+
 **Problem.** Upstream exposes joint/pose services but no integrated gamepad
 Cartesian jog loop for dry-run simulation, IK tuning, and RViz validation.
 
@@ -160,12 +172,11 @@ Run **one** `robot_state_publisher` per session. Do not combine
 `run-teleop-validation-rviz` with `d405_tf_diagnostics` or
 `fake_robot_state_publisher`.
 
-**Out of scope (not in this fork):** hardware teleop bridge, RealSense driver,
-Gazebo physics, Isaac Sim, hand-eye calibration.
+**Not implemented yet:** hardware teleop bridge, RealSense driver, hand-eye calibration. Isaac Sim integration is planned after upstream
+URDF/sim compatibility.
 
-Files: `src/rebotarm_cartesian_teleop/`, `src/rebotarm_msgs/msg/CartesianJog*.msg`,
-`src/rebotarm_cartesian_teleop/config/cartesian_teleop.yaml`,
-`src/rebotarm_cartesian_teleop/launch/*.launch.py`.
+Files: [`rebotarm_cartesian_gamepad_teleop_ros2`](https://github.com/danieldoradotalaveron-rb/rebotarm_cartesian_gamepad_teleop_ros2)
+(git submodule), `rebotarm_msgs/msg/CartesianJog*.msg` (driver fork).
 
 ---
 
@@ -212,13 +223,14 @@ reBotArmController_ROS2/
 ├── FORK_CHANGES.md             # this file
 ├── CHANGELOG.md                # per-commit fork history
 ├── justfile, pyproject.toml    # dev tooling
-├── src/
-│   ├── rebotarm_msgs/          # CartesianJogCmd / CartesianJogState
-│   ├── rebotarm_cartesian_teleop/
-│   ├── rebotarm_bringup/       # URDF, launches, D405 xacro
-│   └── rebotarmcontroller/
+├── src/                        # driver packages (msgs, controller, bringup)
+├── rebotarm_cartesian_gamepad_teleop_ros2/  # git submodule (gamepad teleop)
 └── rebotarm_monitor_ros2/      # git submodule (passive monitor)
 ```
 
-Update the monitor pointer with
-`git submodule update --remote rebotarm_monitor_ros2 && just build-monitor`.
+Update submodule pointers:
+
+```bash
+git submodule update --remote rebotarm_monitor_ros2 && just build-monitor
+git submodule update --remote rebotarm_cartesian_gamepad_teleop_ros2 && just build-teleop
+```
