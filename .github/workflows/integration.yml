@@ -1,0 +1,70 @@
+# Build driver + overlay submodules and run fork integration pytest suites.
+# Unit-only tests run in each overlay submodule CI (no external deps).
+
+name: Integration
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "integration/**"
+      - "rebotarm_monitor_ros2/**"
+      - "rebotarm_cartesian_gamepad_teleop_ros2/**"
+      - ".github/workflows/integration.yml"
+      - ".github/actions/setup-overlay-workspace/**"
+  pull_request:
+    paths:
+      - "src/**"
+      - "integration/**"
+      - "rebotarm_monitor_ros2/**"
+      - "rebotarm_cartesian_gamepad_teleop_ros2/**"
+      - ".github/workflows/integration.yml"
+      - ".github/actions/setup-overlay-workspace/**"
+
+jobs:
+  overlay_integration:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout (with overlay submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup ROS 2 Jazzy
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: jazzy
+
+      - name: Build overlay workspace
+        uses: ./.github/actions/setup-overlay-workspace
+
+      - name: Pytest (integration)
+        env:
+          REBOTARM_DRIVER_WS: ${{ github.workspace }}
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          source rebotarm_monitor_ros2/install/setup.bash
+          source rebotarm_cartesian_gamepad_teleop_ros2/install/setup.bash
+          python3 -m pytest integration/rebotarm_monitor/test -q
+          python3 -m pytest integration/rebotarm_cartesian_teleop/test -q
+
+      - name: Colcon test (overlay unit)
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          source rebotarm_monitor_ros2/install/setup.bash
+          source rebotarm_cartesian_gamepad_teleop_ros2/install/setup.bash
+          cd rebotarm_monitor_ros2
+          colcon test --packages-select rebotarm_monitor
+          colcon test-result --verbose
+          cd ../rebotarm_cartesian_gamepad_teleop_ros2
+          colcon test --packages-select rebotarm_cartesian_teleop
+          colcon test-result --verbose

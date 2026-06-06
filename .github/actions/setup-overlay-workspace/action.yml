@@ -1,0 +1,54 @@
+name: Setup overlay workspace
+description: >
+  Install deps, fetch vendored SDK, and colcon-build the driver fork plus
+  monitor and teleop overlay submodules. Requires ROS 2 Jazzy (setup-ros) first.
+
+runs:
+  using: composite
+  steps:
+    - name: Install build and test tools
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          python3-colcon-common-extensions \
+          python3-rosdep \
+          python3-pytest \
+          python3-pip \
+          ros-jazzy-xacro
+        python3 -m pip install --user pin numpy pyyaml motorbridge
+
+    - name: Init rosdep
+      shell: bash
+      run: |
+        sudo rosdep init || true
+        rosdep update
+
+    - name: Fetch vendored SDK (not in git)
+      shell: bash
+      run: |
+        mkdir -p third_party
+        git clone --depth 1 \
+          https://github.com/vectorBH6/reBotArm_control_py.git \
+          third_party/reBotArm_control_py
+
+    - name: Install ROS dependencies
+      shell: bash
+      run: |
+        source /opt/ros/jazzy/setup.bash
+        rosdep install --from-paths src \
+          rebotarm_monitor_ros2/src \
+          rebotarm_cartesian_gamepad_teleop_ros2/src \
+          --ignore-src -r -y --rosdistro jazzy
+
+    - name: Build driver and overlay workspaces
+      shell: bash
+      run: |
+        source /opt/ros/jazzy/setup.bash
+        colcon build --symlink-install --base-paths src
+        source install/setup.bash
+        cd rebotarm_monitor_ros2
+        colcon build --symlink-install --base-paths src
+        source install/setup.bash
+        cd ../rebotarm_cartesian_gamepad_teleop_ros2
+        colcon build --symlink-install --base-paths src

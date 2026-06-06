@@ -114,8 +114,13 @@ svc-gravity-stop:
 
 # --- Tests -------------------------------------------------------------------
 
-test-monitor:
-    bash -c '{{src_driver}} && cd {{monitor_ws}} && colcon test --packages-select rebotarm_monitor && colcon test-result --verbose'
+test-monitor-integration:
+    bash -c '{{src_monitor}} && python3 -m pytest {{root}}/integration/rebotarm_monitor/test -q'
+
+test-monitor: test-monitor-unit test-monitor-integration
+
+test-monitor-unit:
+    bash -c '{{src_monitor}} && cd {{monitor_ws}} && colcon test --packages-select rebotarm_monitor && colcon test-result --verbose'
 
 test-teleop-integration:
     bash -c '{{src_teleop}} && export REBOTARM_DRIVER_WS={{root}} && python3 -m pytest {{root}}/integration/rebotarm_cartesian_teleop/test -q'

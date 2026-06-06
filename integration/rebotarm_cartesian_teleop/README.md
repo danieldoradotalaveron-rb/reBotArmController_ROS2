@@ -19,3 +19,6 @@ python3 -m pytest integration/rebotarm_cartesian_teleop/test -q
 ```
 
 Or: `just test-teleop-integration`
+
+Registered in the driver fork
+[`.github/workflows/integration.yml`](https://github.com/danieldoradotalaveron-rb/reBotArmController_ROS2/blob/main/.github/workflows/integration.yml).
