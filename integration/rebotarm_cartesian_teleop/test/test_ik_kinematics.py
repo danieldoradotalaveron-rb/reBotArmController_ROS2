@@ -56,18 +56,19 @@ def test_fk_round_trip_ik_succeeds(ik_setup):
     assert max(abs(a - b) for a, b in zip(result.q_target, q0, strict=True)) < 1e-3
 
 
-def test_ik_error_too_high_when_threshold_tiny(ik_setup):
+def test_ik_error_too_high_when_pose_unreachable(ik_setup):
     model, data, end_frame_id, q0, position, rotation = ik_setup
+    far_position = position + np.array([10.0, 0.0, 0.0], dtype=np.float64)
     result = compute_ik_for_pose(
         model,
         data,
         end_frame_id,
-        position,
+        far_position,
         rotation,
         q0,
-        max_iterations=100,
+        max_iterations=5,
         tolerance=1e-4,
-        max_ik_error=1e-20,
+        max_ik_error=1e-6,
     )
     assert result.success is False
     assert result.reason == "IK_ERROR_TOO_HIGH"
