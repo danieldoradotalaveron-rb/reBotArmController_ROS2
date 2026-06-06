@@ -15,8 +15,11 @@ runs:
           python3-rosdep \
           python3-pytest \
           python3-pip \
-          ros-jazzy-xacro
-        python3 -m pip install --user pin numpy pyyaml motorbridge
+          python3-numpy \
+          ros-jazzy-xacro \
+          ros-jazzy-tf-transformations
+        # Do not pip-install numpy: NumPy 2.x breaks apt transforms3d used by tf_transformations.
+        python3 -m pip install --user pin pyyaml motorbridge
 
     - name: Init rosdep
       shell: bash
