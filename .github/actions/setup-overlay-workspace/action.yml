@@ -18,8 +18,12 @@ runs:
           python3-numpy \
           ros-jazzy-xacro \
           ros-jazzy-tf-transformations
-        # Do not pip-install numpy: NumPy 2.x breaks apt transforms3d used by tf_transformations.
-        python3 -m pip install --user pin pyyaml motorbridge
+        # pin/motorbridge can pull NumPy 2.x; apt transforms3d (tf_transformations) needs 1.x
+        # or transforms3d>=0.4.2. Pin both so user-site does not shadow system incorrectly.
+        python3 -m pip install --user \
+          'numpy<2' \
+          'transforms3d>=0.4.2' \
+          pin pyyaml motorbridge
 
     - name: Init rosdep
       shell: bash

@@ -57,6 +57,7 @@ jobs:
           source install/setup.bash
           source rebotarm_monitor_ros2/install/setup.bash
           source rebotarm_cartesian_gamepad_teleop_ros2/install/setup.bash
+          python3 -c "import numpy; import tf_transformations; print('numpy', numpy.__version__)"
           python3 -m pytest integration/rebotarm_monitor/test -q
           python3 -m pytest integration/rebotarm_cartesian_teleop/test -q
 
