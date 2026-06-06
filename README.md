@@ -5,6 +5,11 @@ URDF, and optional overlays (monitor, gamepad teleop). This repo is a **fork**
 of [`Seeed-Projects/reBotArmController_ROS2`](https://github.com/Seeed-Projects/reBotArmController_ROS2)
 with safety, observability, and simulation tooling on top.
 
+[![Integration](https://github.com/danieldoradotalaveron-rb/reBotArmController_ROS2/actions/workflows/integration.yml/badge.svg)](https://github.com/danieldoradotalaveron-rb/reBotArmController_ROS2/actions/workflows/integration.yml)
+[![ROS 2](https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros&logoColor=white)](https://docs.ros.org/en/jazzy/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 Upstream Seeed driver docs (English): [Seeed README](https://github.com/Seeed-Projects/reBotArmController_ROS2/blob/main/README.md).
 
 ---
