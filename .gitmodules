@@ -6,5 +6,5 @@
 	url = https://github.com/danieldoradotalaveron-rb/rebotarm_cartesian_gamepad_teleop_ros2.git
 [submodule "third_party/reBotArm_control_py"]
 	path = third_party/reBotArm_control_py
-	url = https://github.com/dorado-ai-devops/reBotArm_control_py.git
+	url = https://github.com/danieldoradotalaveron-rb/reBotArm_control_py.git
 	branch = main
