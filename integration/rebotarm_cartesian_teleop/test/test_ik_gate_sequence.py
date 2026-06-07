@@ -47,10 +47,12 @@ def _sdk_available() -> bool:
 pytestmark = pytest.mark.skipif(not _sdk_available(), reason="reBotArm_control_py not found")
 
 
-def _candidate_q(joint1: float, **joint_overrides: float) -> list[float]:
+def _candidate_q(
+    joint1: float, *, overrides: dict[int, float] | None = None
+) -> list[float]:
     q = [float(v) for v in TELEOP_INITIAL_Q]
     q[0] = joint1
-    for idx, val in joint_overrides.items():
+    for idx, val in (overrides or {}).items():
         q[idx] = val
     return q
 
@@ -105,7 +107,7 @@ def test_global_operational_limit_fails_before_anchor_window():
 
 
 def test_anchor_window_fails_before_joint_near_limit():
-    q = _candidate_q(1.25, **{4: 1.57})
+    q = _candidate_q(1.25, overrides={4: 1.57})
     result = apply_ik_gate_sequence(_gate_input(q, base_anchor_q=0.0))
     assert result.accepted is False
     assert result.gate_name == "JOINT1_ANCHOR_WINDOW"
@@ -113,7 +115,7 @@ def test_anchor_window_fails_before_joint_near_limit():
 
 
 def test_joint_near_limit_fails_before_ik_no_effect():
-    q = _candidate_q(0.0, **{4: 1.57})
+    q = _candidate_q(0.0, overrides={4: 1.57})
     result = apply_ik_gate_sequence(_gate_input(q))
     assert result.accepted is False
     assert result.gate_name == "JOINT_NEAR_LIMIT"
@@ -152,7 +154,7 @@ def test_ik_no_effect_fails_only_after_previous_gates_pass():
 
 
 def test_first_failing_gate_wins_when_multiple_would_fail():
-    q = _candidate_q(2.0, **{4: 1.57})
+    q = _candidate_q(2.0, overrides={4: 1.57})
     result = apply_ik_gate_sequence(_gate_input(q, base_anchor_q=0.0))
     assert result.gate_name == "JOINT1_GLOBAL_OPERATIONAL_LIMIT"
 
