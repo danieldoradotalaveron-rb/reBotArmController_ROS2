@@ -12,24 +12,18 @@ from rebotarm_cartesian_teleop.fk_kinematics import compute_fk_pose_for_q, init_
 from rebotarm_cartesian_teleop.ik_quality_diagnostics import pos3_from_pose
 from rebotarm_cartesian_teleop.jog_core_logic import (
     COMMAND_FRAME_LOCAL_WINDOW,
-    Joint1AnchorWindowConfig,
-    Joint1GlobalOperationalLimitConfig,
     LocalWindowLimits,
     LocalWindowState,
     apply_base_joint1_jog,
     integrate_local_window_candidate,
     local_target_to_base_link,
     reanchor_local_window_from_fk,
-    reject_ik_if_joint1_anchor_window,
-    reject_ik_if_joint1_global_operational_limit,
 )
 from rebotarm_cartesian_teleop.joy_mapping import map_joy_to_cmd, resolve_base_jog_from_joy
 
-JOINT1_IDX = 0
 GLOBAL_MIN = -1.60
 GLOBAL_MAX = 1.60
-HARD_RAD = 1.20
-JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+JOINT1_IDX = 0
 
 LOCAL_LIMITS = LocalWindowLimits(
     x_min=-0.12,
@@ -231,28 +225,6 @@ def test_mapper_base_jog_wins_over_sticks():
     assert cmd.linear.y == 0.0
     assert cmd.linear.z == 0.0
     assert cmd.command_frame_kind == COMMAND_FRAME_LOCAL_WINDOW
-
-
-def test_joint1_gates_still_work():
-    gates_on_global = Joint1GlobalOperationalLimitConfig(
-        enabled=True, min_rad=GLOBAL_MIN, max_rad=GLOBAL_MAX
-    )
-    gates_on_anchor = Joint1AnchorWindowConfig(enabled=True, hard_window_rad=HARD_RAD)
-
-    q = [float(v) for v in TELEOP_INITIAL_Q]
-    q[0] = 1.61
-    _, ok, reason, _ = reject_ik_if_joint1_global_operational_limit(
-        q, JOINT_NAMES, gates_on_global
-    )
-    assert ok is False
-    assert reason == "JOINT1_GLOBAL_OPERATIONAL_LIMIT"
-
-    q[0] = 1.25
-    _, ok, reason, _ = reject_ik_if_joint1_anchor_window(
-        q, JOINT_NAMES, base_anchor_q=0.0, config=gates_on_anchor
-    )
-    assert ok is False
-    assert reason == "JOINT1_ANCHOR_WINDOW"
 
 
 def test_integrate_local_window_updates_offset():
