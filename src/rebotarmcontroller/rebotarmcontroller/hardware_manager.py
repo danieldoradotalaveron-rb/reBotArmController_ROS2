@@ -27,6 +27,11 @@ class HardwareManager:
         arm_cfg: Optional[str] = None,
         gripper_cfg: Optional[str] = None,
         channel: str = "",
+        safe_park_enabled: bool = True,
+        safe_park_q: Optional[list[float]] = None,
+        safe_park_tolerance_rad: float = 0.03,
+        safe_park_timeout_s: float = 15.0,
+        safe_park_vlim: float = 0.25,
     ) -> None:
         self._sdk_root = self._ensure_rebot_sdk_in_syspath()
 
@@ -83,6 +88,20 @@ class HardwareManager:
         self._gravity_comp_integral: np.ndarray | None = None
         self._gravity_comp_lock_counter = 0
         self._gravity_comp_q_last: np.ndarray | None = None
+        self._safe_park_enabled = bool(safe_park_enabled)
+        self._safe_park_q = (
+            np.asarray(safe_park_q, dtype=np.float64).reshape(-1)
+            if safe_park_q
+            else np.array([], dtype=np.float64)
+        )
+        self._safe_park_tolerance_rad = float(safe_park_tolerance_rad)
+        self._safe_park_timeout_s = float(safe_park_timeout_s)
+        self._safe_park_vlim = float(safe_park_vlim)
+        if self._safe_park_enabled and len(self._safe_park_q) != self._arm.num_joints:
+            raise ValueError(
+                f"safe_park_q must contain {self._arm.num_joints} joints, "
+                f"got {len(self._safe_park_q)}"
+            )
 
     @staticmethod
     def _workspace_root() -> Path:
@@ -172,6 +191,7 @@ class HardwareManager:
         if self._connected:
             return
         self._endpos_ctrl.start()
+        self._seed_endpos_target()
         self._connected = True
         self._enabled = True
         self.init_gripper(str(self._gripper_cfg_path))
@@ -180,13 +200,16 @@ class HardwareManager:
         self,
         safe_home: bool = True,
         disable_after_safe_home: bool = True,
+        safe_park: bool = True,
     ) -> None:
         if not self._connected:
             return
         try:
             self.stop_gravity_compensation()
 
-            if safe_home:
+            if safe_park and self._safe_park_enabled:
+                self.safe_park()
+            elif safe_home:
                 self.safe_home()
 
             if disable_after_safe_home:
@@ -217,6 +240,10 @@ class HardwareManager:
         self._endpos_ctrl._q_target[:] = current
         return current
 
+    def _seed_endpos_target(self) -> None:
+        if self._safe_park_enabled and len(self._safe_park_q) == self._arm.num_joints:
+            self._endpos_ctrl._q_target[:] = self._safe_park_q
+
     def set_joint_position_target(self, positions) -> None:
         target = np.asarray(positions, dtype=np.float64).reshape(-1)
         if len(target) != self._arm.num_joints:
@@ -237,6 +264,7 @@ class HardwareManager:
             self._arm.stop_control_loop()
             self._endpos_ctrl._running = False
             self._endpos_ctrl.start()
+            self._seed_endpos_target()
         else:
             self._arm.enable()
             self._endpos_ctrl._running = True
@@ -265,6 +293,61 @@ class HardwareManager:
             self.set_gripper_position(_GRIPPER_CLOSED_POSITION)
         self.start_endpos_control()
         self._endpos_ctrl.safe_home()
+
+    def safe_park(self) -> None:
+        if not self._safe_park_enabled:
+            raise RuntimeError("safe_park is disabled")
+        self.stop_gravity_compensation()
+        if self.has_gripper:
+            self.set_gripper_position(_GRIPPER_CLOSED_POSITION)
+        self.start_endpos_control()
+        self._drive_joint_target(
+            self._safe_park_q,
+            vlim=self._safe_park_vlim,
+            timeout=self._safe_park_timeout_s,
+            tol=self._safe_park_tolerance_rad,
+            label="safe_park",
+        )
+
+    def _drive_joint_target(
+        self,
+        target: np.ndarray,
+        *,
+        vlim: float,
+        timeout: float,
+        tol: float,
+        label: str,
+    ) -> None:
+        target = np.asarray(target, dtype=np.float64).reshape(-1)
+        if len(target) != self._arm.num_joints:
+            raise ValueError(
+                f"{label} target must contain {self._arm.num_joints} joints, "
+                f"got {len(target)}"
+            )
+        if not self._endpos_ctrl._running:
+            raise RuntimeError(f"{label} requires active end-position control")
+
+        ctrl = self._endpos_ctrl
+        ctrl._stop_send.set()
+        if ctrl._send_thread is not None:
+            ctrl._send_thread.join()
+        ctrl._moving = False
+        ctrl._q_target[:] = target
+        ctrl._vlim_override = np.full(self._arm.num_joints, float(vlim), dtype=np.float64)
+
+        deadline = time.monotonic() + float(timeout)
+        try:
+            while True:
+                q, _, _ = self.get_joint_state()
+                err = float(np.max(np.abs(np.asarray(q, dtype=np.float64) - target)))
+                if err < tol:
+                    break
+                if time.monotonic() > deadline:
+                    print(f"[{label}] timeout (err={err:.4f} rad)")
+                    break
+                time.sleep(getattr(ctrl, "_dt", 0.02) or 0.02)
+        finally:
+            ctrl._vlim_override = None
 
     def set_mode(self, mode: str) -> bool:
         mode = mode.strip().lower()

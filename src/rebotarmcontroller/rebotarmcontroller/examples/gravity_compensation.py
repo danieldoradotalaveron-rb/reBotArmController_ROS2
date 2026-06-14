@@ -64,9 +64,9 @@ def main() -> None:
         Trigger,
         f"/{_NAMESPACE}/gravity_compensation/stop",
     )
-    safe_home_client = node.create_client(
+    park_client = node.create_client(
         Trigger,
-        f"/{_NAMESPACE}/safe_home",
+        f"/{_NAMESPACE}/park",
     )
     disable_client = node.create_client(
         Trigger,
@@ -91,9 +91,9 @@ def main() -> None:
         except Exception as exc:
             node.get_logger().warn(f"stop gravity compensation cleanup failed: {exc}")
         try:
-            _call_trigger(node, safe_home_client, "safe_home", timeout_sec=35.0)
+            _call_trigger(node, park_client, "safe_park", timeout_sec=35.0)
         except Exception as exc:
-            node.get_logger().warn(f"safe_home cleanup failed: {exc}")
+            node.get_logger().warn(f"safe_park cleanup failed: {exc}")
         try:
             _call_trigger(node, disable_client, "disable")
         except Exception as exc:

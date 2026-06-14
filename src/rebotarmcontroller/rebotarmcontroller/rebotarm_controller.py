@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -31,6 +33,12 @@ class reBotArmController(Node):
         self.declare_parameter("ee_frame_id", "end_link")
         self.declare_parameter("safe_home_on_shutdown", True)
         self.declare_parameter("disable_after_safe_home", True)
+        self.declare_parameter("safe_park_on_shutdown", False)
+        self.declare_parameter("safe_park_enabled", False)
+        self.declare_parameter("safe_park_q", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.declare_parameter("safe_park_tolerance_rad", 0.03)
+        self.declare_parameter("safe_park_timeout_s", 15.0)
+        self.declare_parameter("safe_park_vlim", 0.25)
 
         arm_config = self.get_parameter("arm_config").value or None
         gripper_config = self.get_parameter("gripper_config").value or None
@@ -44,6 +52,12 @@ class reBotArmController(Node):
         self.disable_after_safe_home = bool(
             self.get_parameter("disable_after_safe_home").value
         )
+        self.safe_park_on_shutdown = bool(
+            self.get_parameter("safe_park_on_shutdown").value
+        )
+        safe_park_q = self.get_parameter("safe_park_q").value
+        if isinstance(safe_park_q, str):
+            safe_park_q = ast.literal_eval(safe_park_q)
         if cmd_arbitration not in ("reject", "preempt"):
             self.get_logger().warn(
                 f"unsupported cmd_arbitration={cmd_arbitration!r}; using 'reject'"
@@ -54,6 +68,13 @@ class reBotArmController(Node):
             arm_cfg=arm_config,
             gripper_cfg=gripper_config,
             channel=channel,
+            safe_park_enabled=bool(self.get_parameter("safe_park_enabled").value),
+            safe_park_q=list(safe_park_q),
+            safe_park_tolerance_rad=float(
+                self.get_parameter("safe_park_tolerance_rad").value
+            ),
+            safe_park_timeout_s=float(self.get_parameter("safe_park_timeout_s").value),
+            safe_park_vlim=float(self.get_parameter("safe_park_vlim").value),
         )
         self.hardware.connect()
 
@@ -84,6 +105,7 @@ class reBotArmController(Node):
         self.hardware.shutdown(
             safe_home=self.safe_home_on_shutdown,
             disable_after_safe_home=self.disable_after_safe_home,
+            safe_park=self.safe_park_on_shutdown,
         )
 
 

@@ -43,6 +43,12 @@ class ArmServices:
         )
         node.create_service(
             Trigger,
+            self._service("park"),
+            self.park,
+            callback_group=node.slow_group,
+        )
+        node.create_service(
+            Trigger,
             self._service("gravity_compensation/start"),
             self.start_gravity_compensation,
             callback_group=node.slow_group,
@@ -121,6 +127,17 @@ class ArmServices:
             self._hardware.safe_home()
             response.success = True
             response.message = "safe_home complete"
+        except Exception as exc:
+            response.success = False
+            response.message = str(exc)
+        self._node.publish_arm_status()
+        return response
+
+    def park(self, _request, response):
+        try:
+            self._hardware.safe_park()
+            response.success = True
+            response.message = "safe_park complete"
         except Exception as exc:
             response.success = False
             response.message = str(exc)
