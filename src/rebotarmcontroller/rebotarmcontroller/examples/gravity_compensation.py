@@ -80,6 +80,7 @@ def main() -> None:
             node,
             start_client,
             "start gravity compensation",
+            timeout_sec=30.0,
         ):
             raise SystemExit(1)
         node.get_logger().info("press Ctrl+C to stop gravity compensation")
@@ -87,7 +88,7 @@ def main() -> None:
             rclpy.spin_once(node, timeout_sec=0.2)
     finally:
         try:
-            _call_trigger(node, stop_client, "stop gravity compensation")
+            _call_trigger(node, stop_client, "stop gravity compensation", timeout_sec=30.0)
         except Exception as exc:
             node.get_logger().warn(f"stop gravity compensation cleanup failed: {exc}")
         try:
