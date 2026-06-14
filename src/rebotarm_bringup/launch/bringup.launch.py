@@ -11,6 +11,7 @@ def generate_launch_description():
     bringup_share = FindPackageShare("rebotarm_bringup")
     arm_config = LaunchConfiguration("arm_config")
     gripper_config = LaunchConfiguration("gripper_config")
+    safe_park_config = LaunchConfiguration("safe_park_config")
     channel = LaunchConfiguration("channel")
     joint_state_rate = LaunchConfiguration("joint_state_rate")
     cmd_arbitration = LaunchConfiguration("cmd_arbitration")
@@ -37,6 +38,10 @@ def generate_launch_description():
                 "gripper_config",
                 default_value=PathJoinSubstitution([bringup_share, "config", "gripper.yaml"]),
             ),
+            DeclareLaunchArgument(
+                "safe_park_config",
+                default_value=PathJoinSubstitution([bringup_share, "config", "safe_park.yaml"]),
+            ),
             DeclareLaunchArgument("channel", default_value=""),
             DeclareLaunchArgument("joint_state_rate", default_value="100.0"),
             DeclareLaunchArgument("cmd_arbitration", default_value="reject"),
@@ -53,6 +58,7 @@ def generate_launch_description():
                 output="screen",
                 on_exit=Shutdown(reason="reBotArmController exited"),
                 parameters=[
+                    safe_park_config,
                     {
                         "arm_config": arm_config,
                         "gripper_config": gripper_config,

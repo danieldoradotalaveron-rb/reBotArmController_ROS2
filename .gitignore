@@ -8,3 +8,8 @@ __pycache__/
 *.egg-info/
 info
 third_party/
+
+# devel-only submodules; do not track on main
+rebotarm_monitor_ros2/
+rebotarm_cartesian_gamepad_teleop_ros2/
+integration/
