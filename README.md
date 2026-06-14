@@ -1,5 +1,11 @@
 # reBotArm ROS2 SDK
 
+> **Branch `devel/based-on-upstream-d3a415e`** — fork development line.  
+> Driver baseline: upstream [`d3a415e`](https://github.com/Seeed-Projects/reBotArmController_ROS2/commit/d3a415ef24a560dbd76b07bcb3837d7d0918a97d)
+> (*Added new examples for demonstration using ROS2. Updated docs.*).  
+> Does **not** include later Seeed `main` changes (MoveIt, flexible gripper URDF, gripper open/close, `RobotArm.fresh()` fix).  
+> Latest Seeed `main` lives on [this repo's `main` branch](https://github.com/danieldoradotalaveron-rb/reBotArmController_ROS2/tree/main).
+
 ROS 2 **Jazzy** workspace for the **reBot Arm B601-DM**: motor driver, bringup,
 URDF, and optional overlays (monitor, gamepad teleop). This repo is a **fork**
 of [`Seeed-Projects/reBotArmController_ROS2`](https://github.com/Seeed-Projects/reBotArmController_ROS2)
@@ -34,6 +40,7 @@ for sim validation. Safe park on Ctrl+C or `just svc-park`.
 
 ```bash
 git clone --recurse-submodules \
+  -b devel/based-on-upstream-d3a415e \
   https://github.com/danieldoradotalaveron-rb/reBotArmController_ROS2.git
 cd reBotArmController_ROS2
 sudo apt install just
